@@ -1,0 +1,13 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"addin",
+	"id":	"a1163e58-d70b-4233-8e48-c0ce0a6e703a",
+	"author":	"tssmith",
+	"description":	{
+		"":	"Useful tools for FRC design"
+	},
+	"version":	"1.0.0",
+	"runOnStartup":	false,
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
