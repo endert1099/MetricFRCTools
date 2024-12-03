@@ -10,7 +10,7 @@ ui = app.userInterface
 # TODO *** Specify the command identity information. ***
 CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_cmdDialog'
 CMD_NAME = 'Extrude Timing Belt'
-CMD_Description = 'Extrude a 5mm HTD belt from a pitch line'
+CMD_Description = 'Extrude a Timing Belt from a pitch line or pitch circles'
 
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = True
@@ -59,6 +59,7 @@ def stop():
 
     # Delete the button command control
     if command_control:
+        command_control.isPromoted = False
         command_control.deleteMe()
 
     # Delete the command definition
