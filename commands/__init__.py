@@ -4,15 +4,13 @@
 # If you want to add an additional command, duplicate one of the existing directories and import it here.
 # You need to use aliases (import "entry" as "my_module") assuming you have the default module named "entry".
 from .TimingBelt import entry as TimingBelt
-from .paletteShow import entry as paletteShow
-from .paletteSend import entry as paletteSend
+from .Tubify import entry as Tubify
 
 # TODO add your imported modules to this list.
 # Fusion will automatically call the start() and stop() functions.
 commands = [
     TimingBelt,
-    paletteShow,
-    paletteSend
+    Tubify
 ]
 
 
