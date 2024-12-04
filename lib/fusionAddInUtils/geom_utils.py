@@ -15,6 +15,9 @@ def toPoint3D( pt: adsk.core.Point2D ) -> adsk.core.Point3D :
 def addPoint3D( pt1: adsk.core.Point3D, pt2: adsk.core.Point3D ) -> adsk.core.Point3D :
     return adsk.core.Point3D.create( pt1.x + pt2.x, pt1.y + pt2.y, pt1.z + pt2.z )
 
+def midPoint3D( pt1: adsk.core.Point3D, pt2: adsk.core.Point3D ) -> adsk.core.Point3D :
+    return adsk.core.Point3D.create( (pt1.x + pt2.x)/2, (pt1.y + pt2.y)/2, (pt1.z + pt2.z)/2 )
+
 def offsetPoint3D( pt1: adsk.core.Point3D, x: float, y: float, z: float ) -> adsk.core.Point3D :
     return adsk.core.Point3D.create( pt1.x + x, pt1.y + y, pt1.z + z )
 

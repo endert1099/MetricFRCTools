@@ -87,7 +87,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # TODO Define the dialog for your command by adding different inputs to the command.
 
-    # Create a Sketch Curve selection input.
+    # Create a Solid Body selection input.
     solidSelection = inputs.addSelectionInput('tube_solid', 'Solid', 'Select the solid to Tubify')
     solidSelection.addSelectionFilter( "SolidBodies" )
     solidSelection.setSelectionLimits( 1, 1 )
