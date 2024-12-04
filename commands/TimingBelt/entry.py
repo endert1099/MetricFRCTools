@@ -159,6 +159,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
             newCurve.item(0).isConstruction = True
             pathCurves.add( curve )
             curves.append( newCurve.item(0) )
+    
+    futil.log( "Path Curves ::")
+    futil.print_SketchObjectCollection( pathCurves )
 
     curveLength = 0.0
     for curve in curves:
@@ -181,6 +184,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
     geoConstraints = sketch.geometricConstraints
     offsetInput = geoConstraints.createOffsetInput( curves, half_belt_thickness )
     geoConstraints.addTwoSidesOffset( offsetInput, True )
+
+    futil.log(f'Offsetting created {sketch.profiles.count} profiles..')
+    if sketch.profiles.count < 2 :
+        futil.popup_error(f'offset profiles not created correctly.')
 
     maxArea = 0
     insideLoop = None
@@ -530,6 +537,8 @@ def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
     tangentLine1.isConstruction = True
     geoConstraints.addTangent( tangentLine1, circle1 )
     geoConstraints.addTangent( tangentLine1, circle2 )
+    geoConstraints.addCoincident( tangentLine1.startSketchPoint, circle1 )
+    geoConstraints.addCoincident( tangentLine1.endSketchPoint, circle2 )
 
     T2startPt = futil.addPoint2D( CLstartPt, futil.multVector2D( CLnormal, -circle1.radius ) )
     T2endPt = futil.addPoint2D( CLendPt, futil.multVector2D( CLnormal, -circle2.radius ) )
@@ -537,18 +546,26 @@ def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
     tangentLine2.isConstruction = True
     geoConstraints.addTangent( tangentLine2, circle1 )
     geoConstraints.addTangent( tangentLine2, circle2 )
+    geoConstraints.addCoincident( tangentLine2.startSketchPoint, circle1 )
+    geoConstraints.addCoincident( tangentLine2.endSketchPoint, circle2 )
 
     arc1 = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( 
         circle1.centerSketchPoint, tangentLine1.startSketchPoint, tangentLine2.startSketchPoint )
     arc1.isConstruction = True
-    geoConstraints.addConcentric( arc1, circle1 )
-    geoConstraints.addTangent( arc1, tangentLine1 )
+#    geoConstraints.addConcentric( arc1, circle1 )
+    try :
+        geoConstraints.addTangent( arc1, tangentLine1 )
+    except:
+        None
 
     arc2 = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( 
         circle2.centerSketchPoint, tangentLine2.endSketchPoint, tangentLine1.endSketchPoint )
     arc2.isConstruction = True
-    geoConstraints.addConcentric( arc2, circle2 )
-    geoConstraints.addTangent( arc2, tangentLine2 )
+#    geoConstraints.addConcentric( arc2, circle2 )
+    try:
+        geoConstraints.addTangent( arc2, tangentLine2 )
+    except:
+        None
 
     connectedCurves = sketch.findConnectedCurves( tangentLine1 )
     # curves = []

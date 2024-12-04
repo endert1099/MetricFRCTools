@@ -64,6 +64,10 @@ def handle_error(name: str, show_message_box: bool = False):
     if show_message_box:
         ui.messageBox(f'{name}\n{traceback.format_exc()}')
 
+def popup_error( message: str ):
+    log(message)
+    ui.messageBox( message )
+
 def print_SketchObjectCollection( col: adsk.core.ObjectCollection ) :
     log(f'print_SketchObjectCollection() -- Collection has {col.count} items...')
     for item in col.asArray():
@@ -71,4 +75,29 @@ def print_SketchObjectCollection( col: adsk.core.ObjectCollection ) :
         log(f'item type = {item.objectType}:')
         log(f'   isFixed({item.isFixed}), is2D({item.is2D}), isFullyConstr({item.isFullyConstrained}), isRef({item.isReference})')
 
+def print_Selection( selections: adsk.core.SelectionCommandInput ) :
+    i = 0
+    log(f'Selection has {selections.selectionCount} items.')
+    while i < selections.selectionCount:
+        print_BaseObject( selections.selection(i).entity )
+        i += 1
 
+def print_BaseObject( object: adsk.core.Base ) :
+    log(f'item type = {object.objectType}, isValid={object.isValid}')
+
+def print_OrientedBB( orientedBB: adsk.core.OrientedBoundingBox3D ) :
+    log(f'item type = {orientedBB.objectType}, isValid={orientedBB.isValid}')
+    log(f'   height = {orientedBB.height}, length={orientedBB.length}, width={orientedBB.width}')
+    print_Point3D( orientedBB.centerPoint, "   centerPt: ")
+
+def print_Point3D( pt: adsk.core.Point3D, prefix: str = "" ) :
+    log(f'{prefix}x,y,z = ({pt.x:.3},{pt.y:.3},{pt.z:.3})')
+
+
+
+
+def inchValue( inches: float ) -> adsk.core.ValueInput :
+    return adsk.core.ValueInput.createByReal( inches * 2.54 )
+
+def Value( number: float ) -> adsk.core.ValueInput :
+    return adsk.core.ValueInput.createByReal( number )
