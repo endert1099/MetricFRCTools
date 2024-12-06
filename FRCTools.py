@@ -16,9 +16,11 @@ def run(context):
 
         # Get the panel the button will be created in.
         panel = workspace.toolbarPanels.itemById(config.PANEL_ID)
+        sketchpanel = workspace.toolbarPanels.itemById(config.SKETCH_CREATE_ID)
 
         # Create the the FRCTool submenu.
         submenu = panel.controls.addDropDown( "FRCTools", "", config.DROPDOWN_ID )
+        submenu = sketchpanel.controls.addDropDown( "FRCTools", "", config.DROPDOWN_ID )
 
         # This will run the start function in each of your commands as defined in commands/__init__.py
         commands.start()
@@ -43,6 +45,12 @@ def stop(context):
         if submenu:
             submenu.deleteMe()
 
+        sketchpanel = workspace.toolbarPanels.itemById(config.SKETCH_CREATE_ID)
+        submenu = sketchpanel.controls.itemById( config.DROPDOWN_ID )
+
+        # Delete the FRCTools submenu
+        if submenu:
+            submenu.deleteMe()
 
     except:
         futil.handle_error('stop')

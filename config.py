@@ -23,4 +23,5 @@ sample_palette_id = f'{COMPANY_NAME}_{ADDIN_NAME}_palette_id'
 # Toolbar stuff
 WORKSPACE_ID = 'FusionSolidEnvironment'
 PANEL_ID = 'SolidCreatePanel'
+SKETCH_CREATE_ID = 'SketchCreatePanel'
 DROPDOWN_ID = 'FRCToolsSubMenu'

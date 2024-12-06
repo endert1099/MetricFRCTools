@@ -151,7 +151,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     # Extrude the pulley sketch 
     if sketch.profiles.count != 1 :
-        futil.popup_error(f'Sketch does not have one profile returned {sketch.profiles.count}')
+        futil.popup_error(f'Sketch does not have one profile, returned {sketch.profiles.count}.')
         return
     
     extrudes = workingComp.features.extrudeFeatures
@@ -165,6 +165,7 @@ def command_preview(args: adsk.core.CommandEventArgs):
     futil.log(f'{CMD_NAME} Command Preview Event')
     inputs = args.command.commandInputs
 
+    command_execute( args )
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.

@@ -74,6 +74,7 @@ def print_SketchObjectCollection( col: adsk.core.ObjectCollection ) :
         item: adsk.fusion.SketchEntity = item
         log(f'item type = {item.objectType}:')
         log(f'   isFixed({item.isFixed}), is2D({item.is2D}), isFullyConstr({item.isFullyConstrained}), isRef({item.isReference})')
+        print_SketchCurve( item )
 
 def print_Selection( selections: adsk.core.SelectionCommandInput ) :
     i = 0
@@ -91,10 +92,27 @@ def print_OrientedBB( orientedBB: adsk.core.OrientedBoundingBox3D ) :
     print_Point3D( orientedBB.centerPoint, "   centerPt: ")
 
 def print_Point3D( pt: adsk.core.Point3D, prefix: str = "" ) :
-    log(f'{prefix}x,y,z = ({pt.x:.3},{pt.y:.3},{pt.z:.3})')
+    log( f'{prefix} {format_Point3D( pt )}' )
 
+def format_Point3D( pt: adsk.core.Point3D ) :
+    return f'({pt.x:.3},{pt.y:.3},{pt.z:.3})'
 
-
+def print_SketchCurve( curve: adsk.fusion.SketchCurve ) :
+    if curve.objectType == adsk.fusion.SketchLine.classType() :
+        curve: adsk.fusion.SketchLine = curve
+        log(f'SketchLine: {format_Point3D(curve.startSketchPoint.geometry)} -- {format_Point3D(curve.endSketchPoint.geometry)}')
+    elif curve.objectType == adsk.fusion.SketchArc.classType() :
+        curve: adsk.fusion.SketchArc = curve
+        str = f'SketchArc: C{format_Point3D(curve.startSketchPoint.geometry)}, '
+        str += f'{format_Point3D(curve.startSketchPoint.geometry)} -- {format_Point3D(curve.endSketchPoint.geometry)}'
+        log(str)
+    elif curve.objectType == adsk.fusion.SketchCircle.classType() :
+        curve: adsk.fusion.SketchCircle = curve
+        str = f'SketchCircle: C{format_Point3D(curve.startSketchPoint.geometry)}, '
+        str += f'radius = {curve.radius}'
+        log(str)
+    else :
+        log(f'print_SketchCurve() --> {curve.objectType} Not handled.')
 
 def inchValue( inches: float ) -> adsk.core.ValueInput :
     return adsk.core.ValueInput.createByReal( inches * 2.54 )

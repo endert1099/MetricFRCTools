@@ -203,8 +203,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
 
     # Obtain the component of the solid body
-    workingOcc = solid.assemblyContext
-    workingComp = workingOcc.component
+    workingComp = solid.parentComponent
 
     # Shell out the tube 
     shells = workingComp.features.shellFeatures
@@ -220,24 +219,25 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     # 2 Side Holes
     if hasWiderSides :
-        createHoleProfiles( workingOcc, narrowSideFaces, longLength, 1.0, 2.0, endOffset.value / 2.54, showPartialHoles )
+        createHoleProfiles( workingComp, narrowSideFaces, longLength, 1.0, 2.0, endOffset.value / 2.54, showPartialHoles )
     else:
-        createHoleProfiles( workingOcc, wideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+        createHoleProfiles( workingComp, wideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
 
     # 4 Side Holes
     if holeSides.selectedItem.index == 2 : 
         if hasWiderSides :
-            createHoleProfiles( workingOcc, wideSideFaces, longLength, 2.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+            createHoleProfiles( workingComp, wideSideFaces, longLength, 2.0, 1.0, endOffset.value / 2.54, showPartialHoles )
         else :
-            createHoleProfiles( workingOcc, otherWideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+            createHoleProfiles( workingComp, otherWideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
 
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Preview Event')
+    # futil.log(f'{CMD_NAME} Command Preview Event')
     inputs = args.command.commandInputs
 
+    command_execute( args )
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.
@@ -245,8 +245,8 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     changed_input = args.input
     inputs = args.inputs
 
-    # General logging for debug.
-    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    # # General logging for debug.
+    # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
 
 # This event handler is called when the user interacts with any of the inputs in the dialog
@@ -269,26 +269,24 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Destroy Event')
+    # futil.log(f'{CMD_NAME} Command Destroy Event')
 
     global local_handlers
     local_handlers = []
 
 
 def createHoleProfiles( 
-        workingOcc: adsk.fusion.Occurrence, 
+        workingComp: adsk.fusion.Component, 
         sideFaces: adsk.core.ObjectCollection,
         length: float, width: float, cutDepth: float, offset: float, showPartialHoles: bool ) :
 
-    workingComp = workingOcc.component
-
     # Create a new sketch for the wide side holes
-    sketch = workingComp.sketches.add( sideFaces.item(0), workingOcc )
+    sketch = workingComp.sketches.add( sideFaces.item(0) )
     sketchEdges = adsk.core.ObjectCollection.create()
     for edge in sideFaces.item(0).edges :
         sketchEdges.add( sketch.project( edge ).item(0) )
     
-    futil.print_SketchObjectCollection( sketchEdges )
+    # futil.print_SketchObjectCollection( sketchEdges )
 
     longEdge: adsk.fusion.SketchLine = sketchEdges.item(0)
     shortEdge: adsk.fusion.SketchLine = sketchEdges.item(1)
@@ -296,17 +294,19 @@ def createHoleProfiles(
         longEdge: adsk.fusion.SketchLine = sketchEdges.item(1)
         shortEdge: adsk.fusion.SketchLine = sketchEdges.item(0)
         
-    cornerPoint: adsk.fusion.SketchPoint = longEdge.endSketchPoint
+    cornerPoint = longEdge.endSketchPoint
     if longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.startSketchPoint.geometry ) :
-        futil.log( f'longEdge end is shortEdge Start.')
+        # futil.log( f'longEdge end is shortEdge Start.')
+        None
     elif longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.endSketchPoint.geometry ) :
-        futil.log( f'longEdge end is shortEdge end.')
+        # futil.log( f'longEdge end is shortEdge end.')
+        None
     elif shortEdge.endSketchPoint.geometry.isEqualTo( longEdge.startSketchPoint.geometry ) :
         cornerPoint = shortEdge.endSketchPoint
-        futil.log( f'shortEdge end is longEdge Start.')
+        # futil.log( f'shortEdge end is longEdge Start.')
     elif shortEdge.startSketchPoint.geometry.isEqualTo( longEdge.startSketchPoint.geometry ) :
         cornerPoint = shortEdge.startSketchPoint
-        futil.log( f'shortEdge start is longEdge Start.')
+        # futil.log( f'shortEdge start is longEdge Start.')
     else:
         futil.print_Point3D( longEdge.startSketchPoint.geometry, "longEdge start: ")
         futil.print_Point3D( longEdge.endSketchPoint.geometry, "longEdge end: ")
@@ -331,7 +331,7 @@ def createHoleProfiles(
         cornerHole.centerSketchPoint, cornerPoint, 
         adsk.fusion.DimensionOrientations.VerticalDimensionOrientation, textPoint )
     if showPartialHoles :
-        if offset < 0.3:
+        if offset < 0.5:
             vertDim.value = offset * 2.54
         else :
             vertDim.value = (offset - 0.5) * 2.54
@@ -365,7 +365,7 @@ def createHoleProfiles(
         elif abs(profile.areaProperties().area - circleProfileArea) < 0.001:
             holeProfiles.add( profile )
     
-    futil.log( f'Found {len(holeProfiles)} hole profiles to extrude.')
+    # futil.log( f'Found {len(holeProfiles)} hole profiles to extrude.')
     extrudes = workingComp.features.extrudeFeatures
     cutDistance = adsk.core.ValueInput.createByReal( cutDepth * 2.54 )
     extrudeCut = extrudes.createInput(holeProfiles, adsk.fusion.FeatureOperations.CutFeatureOperation)

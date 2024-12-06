@@ -1,6 +1,7 @@
 import adsk.core
 import adsk.fusion
 import os
+import math
 from ...lib import fusionAddInUtils as futil
 from ... import config
 app = adsk.core.Application.get()
@@ -71,12 +72,9 @@ def stop():
 # This defines the contents of the command dialog and connects to the command related events.
 def command_created(args: adsk.core.CommandCreatedEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Created Event')
+    # futil.log(f'{CMD_NAME} Command Created Event')
 
-    # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
-
-    # TODO Define the dialog for your command by adding different inputs to the command.
 
     # Create a Sketch Curve selection input.
     pitchLineSelection = inputs.addSelectionInput('belt_pitch_line', 'Pitch Line', 'Select the belt pitch line')
@@ -105,7 +103,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    # futil.log(f'{CMD_NAME} Command Execute Event')
 
     # Get a reference to your command's inputs.
     inputs = args.command.commandInputs
@@ -114,6 +112,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
     belt_type: adsk.core.DropDownCommandInput = inputs.itemById('belt_type')
     futil.log(f'Selection count is {pitchLineSelection.selectionCount}...')
 
+    # Save user selections because they seem to be cleared when a new component is created.
     userSelections = []
     i = 0 
     while i < pitchLineSelection.selectionCount:
@@ -128,7 +127,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
     trans = adsk.core.Matrix3D.create()
     workingOcc = rootComp.occurrences.addNewComponent( trans )
     workingComp = workingOcc.component
-    # Create a new sketch for the belt
+    # Create a new sketch for the belt on the same plane
     sketch = workingComp.sketches.add( originalSketch.referencePlane, workingOcc )
 
     if belt_type.selectedItem.index == 0:
@@ -160,8 +159,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
             pathCurves.add( curve )
             curves.append( newCurve.item(0) )
     
-    futil.log( "Path Curves ::")
-    futil.print_SketchObjectCollection( pathCurves )
+    # futil.log( "Path Curves ::")
+    # futil.print_SketchObjectCollection( pathCurves )
 
     curveLength = 0.0
     for curve in curves:
@@ -199,64 +198,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
             insideLoop = profile.profileLoops.item(0)
         i += 1
 
-    futil.log(f'Inside loop has {insideLoop.profileCurves.count} curves in it.')
-
-    # Determin the inside curves and the centroid
-    bbox = insideLoop.profileCurves.item(0).sketchEntity.boundingBox
-    i = 0
-    while i < insideLoop.profileCurves.count:
-        curve = insideLoop.profileCurves.item(i).sketchEntity
-        bbox.combine( curve.boundingBox )
-        i += 1
-
-    centroid = adsk.core.Point2D.create()
-    centroid.x = (bbox.maxPoint.x + bbox.minPoint.x) / 2.0
-    centroid.y = (bbox.maxPoint.y + bbox.minPoint.y) / 2.0
-    lineCurve: adsk.fusion.SketchLine = None
-    lineNormal = adsk.core.Point2D.create()
-    i = 0
-    while i < insideLoop.profileCurves.count:
-        curve = insideLoop.profileCurves.item(i).sketchEntity
-        futil.log(f'Found a curve of type {curve.objectType} from ({curve.startSketchPoint.geometry.x:.3},{curve.startSketchPoint.geometry.y:.3}) to (({curve.endSketchPoint.geometry.x:.3},{curve.endSketchPoint.geometry.y:.3})')
-        if curve.objectType == adsk.fusion.SketchLine.classType():
-            StartPt = curve.startSketchPoint.geometry
-            EndPt = curve.endSketchPoint.geometry
-            insideNormal = adsk.core.Point2D.create()
-            insideNormal.x = -(EndPt.y - StartPt.y)
-            insideNormal.y = (EndPt.x - StartPt.x)
-            centroidVec = adsk.core.Point2D.create(EndPt.x, EndPt.y).vectorTo( centroid )
-            angle = centroidVec.angleTo( insideNormal.asVector())
-            futil.log(f'    Centroid to Normal angle={angle:.3}...')
-            if( abs(angle) > 3.14159 / 2.0 ):
-                futil.log(f'    Reversing Normal.')
-                insideNormal.x *= -1.0
-                insideNormal.y *= -1.0
-            futil.log(f'    Checking Line from ({StartPt.x:.3},{StartPt.y:.3}) to ({EndPt.x:.3},{EndPt.y:.3}), Normal=({insideNormal.x:.3},{insideNormal.y:.3})...')
-            if insideNormal.y > -0.000001 :
-                lineCurve = curve
-                lineNormal = insideNormal
-                if insideNormal.y > abs(insideNormal.x):
-                    # Line has a slope between -45 and +45 degrees
-                    if lineCurve.endSketchPoint.geometry.x < lineCurve.startSketchPoint.geometry.x:
-                        toothAnchorPoint = lineCurve.endSketchPoint
-                    else:
-                        toothAnchorPoint = lineCurve.startSketchPoint
-                elif insideNormal.x > 0 :
-                    # Line has a slope of -90 to -45
-                    if lineCurve.endSketchPoint.geometry.y > lineCurve.startSketchPoint.geometry.y:
-                        toothAnchorPoint = lineCurve.endSketchPoint
-                    else:
-                        toothAnchorPoint = lineCurve.startSketchPoint
-                else:
-                    # Line has a slope of 45 to 90
-                    if lineCurve.endSketchPoint.geometry.y < lineCurve.startSketchPoint.geometry.y:
-                        toothAnchorPoint = lineCurve.endSketchPoint
-                    else:
-                        toothAnchorPoint = lineCurve.startSketchPoint
-
-                futil.log(f'    Using Line from ({StartPt.x:.3},{StartPt.y:.3}) to ({EndPt.x:.3},{EndPt.y:.3}), Normal=({insideNormal.x:.3},{insideNormal.y:.3})...')
-                futil.log(f'     toothAnchor =  ({toothAnchorPoint.geometry.x:.3},{toothAnchorPoint.geometry.y:.3}).')
-        i += 1
+    # futil.log(f'Inside loop has {insideLoop.profileCurves.count} curves in it.')
+  
+    (lineCurve, lineNormal, toothAnchorPoint) = findToothAnchor( insideLoop )
 
     if beltPitchLength == 5:
         baseLine = createHTD_5mmProfile( sketch )
@@ -265,23 +209,25 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
 
     geoConstraints.addCoincident( baseLine.startSketchPoint, toothAnchorPoint )
-    if abs( lineNormal.y ) < 0.0001:
-        # Line is nearly vertical
-        if lineNormal.x > 0:
-            # Need to drop the baseline point by rotation
-            length = baseLine.endSketchPoint.geometry.x - baseLine.startSketchPoint.geometry.x
-            success = baseLine.endSketchPoint.move( adsk.core.Vector3D.create( -0.1339746*length, -0.5*length, 0 ) )
-            success = baseLine.endSketchPoint.move( adsk.core.Vector3D.create( -length, -length, 0 ) )
-            futil.log(f'     Dropping baseLine point returned {success}....')
-        else:
-            # Need to raise the baseline point by rotation
-            length = baseLine.endSketchPoint.geometry.x - baseLine.startSketchPoint.geometry.x
-            success = baseLine.endSketchPoint.move( adsk.core.Vector3D.create( -0.1339746*length, 0.5*length, 0 ) )
-            success = baseLine.endSketchPoint.move( adsk.core.Vector3D.create( -length, length, 0 ) )
-            futil.log(f'     Raising baseLine of length {length} returned {success}....')
-
+    # Rotating the tooth profile did not work so a dimension is used instead.
+    # Create a dimension between the tooth profile baseline and the line Curve
+    # and set it to a small angle.  Then delete the dimension and make line collinear
+    angleDim = sketch.sketchDimensions.addAngularDimension( baseLine, lineCurve, baseLine.startSketchPoint.geometry )
+    angleDim.value = 0.1 #radians
+    angleDim.deleteMe()
     geoConstraints.addCollinear( baseLine, lineCurve )
 
+    if args.firingEvent.name == "OnExecutePreview" :
+        return
+    
+    extrudeBelt( sketch, pathCurves, belt_width.value, toothCount, beltPitchLength )
+
+
+def extrudeBelt( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection,
+                beltWidth: float, toothCount: int, beltPitchMM: int ) :
+
+    sketch.parentComponent
+    workingComp = sketch.parentComponent
 
     # Determine the profiles of the belt and tooth
     maxArea = 0
@@ -309,20 +255,20 @@ def command_execute(args: adsk.core.CommandEventArgs):
         i += 1
 
     extrudes = workingComp.features.extrudeFeatures
-    beltWidthValue = adsk.core.ValueInput.createByReal( belt_width.value )
+    beltWidthValue = adsk.core.ValueInput.createByReal( beltWidth )
     extrudeBelt = extrudes.addSimple(beltLoop, beltWidthValue, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
     extrudeTooth = extrudes.addSimple(profileLoop, beltWidthValue, adsk.fusion.FeatureOperations.JoinFeatureOperation)
 
 
     pathPatterns = workingComp.features.pathPatternFeatures
-    beltPitch = adsk.core.ValueInput.createByReal( beltPitchLength / 10.0 )
+    beltPitch = adsk.core.ValueInput.createByReal( beltPitchMM / 10.0 )  # mm -> cm
     toothCountVI = adsk.core.ValueInput.createByReal( toothCount )
     patternCollection = adsk.core.ObjectCollection.create()
     patternCollection.add( extrudeTooth )
     
 #    pathCurves = sketch.findConnectedCurves( originalConnectedCurves.item(0) )
 #    futil.print_SketchObjectCollection( pathCurves )
-    patternPath = adsk.fusion.Path.create( pathCurves, adsk.fusion.ChainedCurveOptions.noChainedCurves )
+    patternPath = adsk.fusion.Path.create( path, adsk.fusion.ChainedCurveOptions.noChainedCurves )
 #    patternPath = adsk.fusion.Path.create( originalConnectedCurves.item(0), adsk.fusion.ChainedCurveOptions.connectedChainedCurves )
     toothPatternInput = pathPatterns.createInput( 
         patternCollection, patternPath, toothCountVI, beltPitch, adsk.fusion.PatternDistanceType.SpacingPatternDistanceType )
@@ -337,6 +283,9 @@ def command_preview(args: adsk.core.CommandEventArgs):
     futil.log(f'{CMD_NAME} Command Preview Event')
     inputs = args.command.commandInputs
 
+    futil.log(f'    event = {args.firingEvent.name}')
+
+    command_execute( args )
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.
@@ -523,10 +472,6 @@ def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
     circle1: adsk.fusion.SketchCircle = sketch.sketchCurves.item(0)
     circle2: adsk.fusion.SketchCircle = sketch.sketchCurves.item(1)
 
-    # centerline = sketch.sketchCurves.sketchLines.addByTwoPoints( circle1.centerSketchPoint, circle2.centerSketchPoint )
-    # geoConstraints.addCoincident( centerline.startSketchPoint, circle1.centerSketchPoint )
-    # geoConstraints.addCoincident( centerline.endSketchPoint, circle2.centerSketchPoint )
-    # centerline.isConstruction = True
     CLstartPt = futil.toPoint2D( circle1.centerSketchPoint.geometry )
     CLendPt = futil.toPoint2D( circle2.centerSketchPoint.geometry )
     CLnormal = futil.lineNormal( CLstartPt, CLendPt )
@@ -535,19 +480,19 @@ def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
     T1endPt = futil.addPoint2D( CLendPt, futil.multVector2D( CLnormal, circle2.radius ) )
     tangentLine1 = sketch.sketchCurves.sketchLines.addByTwoPoints( futil.toPoint3D(T1startPt), futil.toPoint3D(T1endPt) )
     tangentLine1.isConstruction = True
-    geoConstraints.addTangent( tangentLine1, circle1 )
-    geoConstraints.addTangent( tangentLine1, circle2 )
     geoConstraints.addCoincident( tangentLine1.startSketchPoint, circle1 )
     geoConstraints.addCoincident( tangentLine1.endSketchPoint, circle2 )
+    geoConstraints.addTangent( tangentLine1, circle1 )
+    geoConstraints.addTangent( tangentLine1, circle2 )
 
     T2startPt = futil.addPoint2D( CLstartPt, futil.multVector2D( CLnormal, -circle1.radius ) )
     T2endPt = futil.addPoint2D( CLendPt, futil.multVector2D( CLnormal, -circle2.radius ) )
     tangentLine2 = sketch.sketchCurves.sketchLines.addByTwoPoints( futil.toPoint3D(T2startPt), futil.toPoint3D(T2endPt) )
     tangentLine2.isConstruction = True
-    geoConstraints.addTangent( tangentLine2, circle1 )
-    geoConstraints.addTangent( tangentLine2, circle2 )
     geoConstraints.addCoincident( tangentLine2.startSketchPoint, circle1 )
     geoConstraints.addCoincident( tangentLine2.endSketchPoint, circle2 )
+    geoConstraints.addTangent( tangentLine2, circle1 )
+    geoConstraints.addTangent( tangentLine2, circle2 )
 
     arc1 = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( 
         circle1.centerSketchPoint, tangentLine1.startSketchPoint, tangentLine2.startSketchPoint )
@@ -573,3 +518,42 @@ def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
     #     curves.append( curve )
 
     return connectedCurves
+
+# Find the anchor line and endpoint on that line to use for the tooth starting point
+def findToothAnchor( insideLoop: adsk.fusion.ProfileLoop ) :
+
+    # Determin the centroid of the profile loop
+    bbox = insideLoop.profileCurves.item(0).sketchEntity.boundingBox
+    i = 0
+    while i < insideLoop.profileCurves.count:
+        curve = insideLoop.profileCurves.item(i).sketchEntity
+        bbox.combine( curve.boundingBox )
+        i += 1
+
+    centroid = futil.BBCentroid( bbox )
+ 
+    lineCurve: adsk.fusion.SketchLine = None
+    lineNormal = adsk.core.Point2D.create()
+    toothAnchorPoint = adsk.fusion.SketchPoint = None
+    i = 0
+    while i < insideLoop.profileCurves.count:
+        curve = insideLoop.profileCurves.item(i).sketchEntity
+        futil.print_SketchCurve( curve )
+        if curve.objectType == adsk.fusion.SketchLine.classType():
+            curve: adsk.fusion.SketchLine = curve
+            insideNormal = futil.sketchLineNormal( curve, centroid )
+            if futil.toTheRightOf( futil.toLine2D( curve.geometry), centroid ) :
+                lineCurve = curve
+                lineNormal = insideNormal
+                toothAnchorPoint = lineCurve.endSketchPoint
+            else:
+                lineCurve = curve
+                lineNormal = insideNormal
+                toothAnchorPoint = lineCurve.startSketchPoint
+
+            futil.log(f'    Using Line with Normal=({insideNormal.x:.3},{insideNormal.y:.3})...')
+            futil.log(f'     toothAnchor =  ({toothAnchorPoint.geometry.x:.3},{toothAnchorPoint.geometry.y:.3}).')
+            break
+        i += 1
+
+    return (lineCurve, lineNormal, toothAnchorPoint)

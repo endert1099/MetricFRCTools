@@ -2,6 +2,7 @@
 
 import math
 import adsk.core
+import adsk.fusion
 
 app = adsk.core.Application.get()
 ui = app.userInterface
@@ -30,15 +31,35 @@ def addPoint2D( pt1: adsk.core.Point2D, v2: adsk.core.Vector2D ) -> adsk.core.Po
 def offsetPoint2D( pt1: adsk.core.Point2D, x: float, y: float ) -> adsk.core.Point2D :
     return adsk.core.Point2D.create( pt1.x + x, pt1.y + y )
 
+def toLine2D( l3d: adsk.core.Line3D ) -> adsk.core.Line2D :
+    return adsk.core.Line2D.create( toPoint2D(l3d.startPoint), toPoint2D(l3d.endPoint) )
+
 def multVector2D( v: adsk.core.Vector2D, val: float ) -> adsk.core.Vector2D :
     return adsk.core.Vector2D.create( v.x * val, v.y * val )
 
-def lineNormal( line: adsk.core.Line2D ) -> adsk.core.Vector2D :
-    # norm_x = line.endPoint.y - line.startPoint.y
-    # norm_y = line.endPoint.x - line.startPoint.x
-    # mag = math.hypot( norm_x, norm_y )
+def twoPointUnitVector( startPt: adsk.core.Point2D, endPt: adsk.core.Point2D  ) -> adsk.core.Vector2D :
+    vec_x = endPt.x - startPt.x
+    vec_y = endPt.y - startPt.y
+    mag = math.hypot( vec_x, vec_y )
+    return adsk.core.Vector2D.create( vec_x / mag, vec_y / mag )
 
-#    return adsk.core.Vector2D.create( norm_x / mag, norm_y / mag )
+def sketchLineUnitVec( line: adsk.fusion.SketchLine ) -> adsk.core.Vector2D :
+    return twoPointUnitVector( 
+        toPoint2D(line.startSketchPoint.geometry),
+        toPoint2D(line.endSketchPoint.geometry) )
+
+# Determines if a point in the plane is to the right of a line.
+# Determined as though sitting on the start point looking at the end point
+def toTheRightOf( line: adsk.core.Line2D, pt: adsk.core.Point2D  ) -> bool :
+    lineUnitVec = twoPointUnitVector( line.startPoint, line.endPoint )
+    startToPtVec = twoPointUnitVector( line.startPoint, pt )
+
+    # Find the z-component of the cross product
+    z_comp = lineUnitVec.x*startToPtVec.y - lineUnitVec.y*startToPtVec.x
+
+    return z_comp < 0
+
+def lineNormal( line: adsk.core.Line2D ) -> adsk.core.Vector2D :
     return lineNormal( line.startPoint, line.endPoint )
 
 def lineNormal( startPt: adsk.core.Point2D, endPt: adsk.core.Point2D ) -> adsk.core.Vector2D :
@@ -47,6 +68,17 @@ def lineNormal( startPt: adsk.core.Point2D, endPt: adsk.core.Point2D ) -> adsk.c
     mag = math.hypot( norm_x, norm_y )
 
     return adsk.core.Vector2D.create( norm_x / mag, norm_y / mag )
+
+def sketchLineNormal( line: adsk.fusion.SketchLine, towardPt: adsk.core.Point3D = None ) -> adsk.core.Vector2D :
+    normal = lineNormal( toPoint2D(line.startSketchPoint.geometry), toPoint2D(line.endSketchPoint.geometry) )
+    if towardPt == None:
+        return normal
+    
+    towardUnitVec = twoPointUnitVector( toPoint2D(line.startSketchPoint.geometry), toPoint2D(towardPt) )
+    angle = towardUnitVec.angleTo( normal )
+    if abs(angle) > math.pi:
+        normal = multVector2D( normal, -1.0 )
+    return normal
 
 def BBCentroid( bb: adsk.core.BoundingBox3D ) :
     sum = addPoint3D( bb.maxPoint, bb.minPoint )
