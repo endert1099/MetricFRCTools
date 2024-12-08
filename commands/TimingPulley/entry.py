@@ -166,6 +166,7 @@ def command_preview(args: adsk.core.CommandEventArgs):
     inputs = args.command.commandInputs
 
     command_execute( args )
+    args.isValidResult = True
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.

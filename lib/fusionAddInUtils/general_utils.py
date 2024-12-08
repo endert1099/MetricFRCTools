@@ -99,20 +99,27 @@ def format_Point3D( pt: adsk.core.Point3D ) :
 
 def print_SketchCurve( curve: adsk.fusion.SketchCurve ) :
     if curve.objectType == adsk.fusion.SketchLine.classType() :
-        curve: adsk.fusion.SketchLine = curve
-        log(f'SketchLine: {format_Point3D(curve.startSketchPoint.geometry)} -- {format_Point3D(curve.endSketchPoint.geometry)}')
+        line: adsk.fusion.SketchLine = curve
+        log(f'SketchLine: {format_Point3D(line.startSketchPoint.geometry)} -- {format_Point3D(line.endSketchPoint.geometry)}')
     elif curve.objectType == adsk.fusion.SketchArc.classType() :
-        curve: adsk.fusion.SketchArc = curve
-        str = f'SketchArc: C{format_Point3D(curve.startSketchPoint.geometry)}, '
-        str += f'{format_Point3D(curve.startSketchPoint.geometry)} -- {format_Point3D(curve.endSketchPoint.geometry)}'
+        arc: adsk.fusion.SketchArc = curve
+        str = f'SketchArc: C{format_Point3D(arc.centerSketchPoint.geometry)}, '
+        str += f'{format_Point3D(arc.startSketchPoint.geometry)} -- {format_Point3D(arc.endSketchPoint.geometry)}'
         log(str)
     elif curve.objectType == adsk.fusion.SketchCircle.classType() :
-        curve: adsk.fusion.SketchCircle = curve
-        str = f'SketchCircle: C{format_Point3D(curve.startSketchPoint.geometry)}, '
-        str += f'radius = {curve.radius}'
+        circle: adsk.fusion.SketchCircle = curve
+        str = f'SketchCircle: C{format_Point3D(circle.centerSketchPoint.geometry)}, '
+        str += f'radius = {circle.radius}'
         log(str)
     else :
         log(f'print_SketchCurve() --> {curve.objectType} Not handled.')
+    log(f'    is2D({curve.is2D}), isDeletable({curve.isDeletable}), isFixed({curve.isFixed}), isFullyConstrained({curve.isFullyConstrained})')
+    log(f'    isLinked({curve.isLinked}), isReference({curve.isReference}), isValid({curve.isValid}), isVisible({curve.isVisible})')
+
+def print_Attributes( entity: adsk.fusion.SketchEntity ) :
+    log(f'Entity {entity.objectType} has {len(entity.attributes)} attributes')
+    for attr in entity.attributes:
+        log(f'   {attr.name} ==> {attr.value}')
 
 def inchValue( inches: float ) -> adsk.core.ValueInput :
     return adsk.core.ValueInput.createByReal( inches * 2.54 )
