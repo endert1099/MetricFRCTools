@@ -834,7 +834,11 @@ def getParentLine( curve: adsk.fusion.SketchCurve ) -> adsk.fusion.SketchLine :
         return None
     
     # Check to see if the curve has the CC_LINE_PARENT_LINE attribute set
-    token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_PARENT_LINE )
+    try:
+        token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_PARENT_LINE )
+    except:
+        return None
+    
     if not token:
         # No parent line set.  Check if this is the actual CCLine by looking for N1
         token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_N1 )

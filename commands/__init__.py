@@ -1,17 +1,17 @@
 # Here you define the commands that will be added to your add-in.
 
-# TODO Import the modules corresponding to the commands you created.
 # If you want to add an additional command, duplicate one of the existing directories and import it here.
 # You need to use aliases (import "entry" as "my_module") assuming you have the default module named "entry".
 from .CCDistance import entry as CCDistance
+from .BoltPattern import entry as BoltPattern
 from .TimingBelt import entry as TimingBelt
 from .TimingPulley import entry as TimingPulley
 from .Tubify import entry as Tubify
 
-# TODO add your imported modules to this list.
 # Fusion will automatically call the start() and stop() functions.
 commands = [
     CCDistance,
+    BoltPattern,
     TimingBelt,
     TimingPulley,
     Tubify
