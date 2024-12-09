@@ -44,6 +44,7 @@ bolt_patterns: list[BoltPattern] = [
     BoltPattern('Kraken X44', 0.75, 1.375, 0.196, 12, [1,1,1,1,1,1,1,1,1,1,1,0]),
     BoltPattern('NEO Vortex', 0.75, 2.0, 0.196, 8, [1,1,1,0,1,1,1,0]),
     BoltPattern('NEO 550', 0.5118, 0.9843, 0.125, 4, []),
+    BoltPattern('2" MultiMotor', 0.75, 2.0, 0.196, 24, [1,0,1,1,1,0, 1,0,1,1,1,0, 1,0,1,1,1,0, 1,0,1,1,1,0]),
 ]
 
 # Executed when add-in is run.
@@ -64,11 +65,11 @@ def start():
     # Find the the FRCTools submenu.
     submenu = panel.controls.itemById( config.DROPDOWN_ID )
 
-    # Create the button command control in the UI.
-    control = submenu.controls.addCommand(cmd_def)
+    # # Create the button command control in the UI.
+    # control = submenu.controls.addCommand(cmd_def)
 
-    # Specify if the command is promoted to the main toolbar. 
-    control.isPromoted = IS_PROMOTED
+    # # Specify if the command is promoted to the main toolbar. 
+    # control.isPromoted = IS_PROMOTED
 
 # Executed when add-in is stopped.
 def stop():
@@ -128,6 +129,10 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
     futil.log(f'{CMD_NAME} Command Execute Event')
+
+    inputs = args.command.commandInputs
+    boltPattern: adsk.core.DropDownCommandInput = inputs.itemById('bolt_pattern')
+    centerSelection: adsk.core.SelectionCommandInput = inputs.itemById('center_selection')
 
  
 

@@ -4,6 +4,8 @@ import os
 import math
 from ...lib import fusionAddInUtils as futil
 from ... import config
+from ...lib.CCLine import *
+
 app = adsk.core.Application.get()
 ui = app.userInterface
 
@@ -34,10 +36,9 @@ local_handlers = []
 # they are not released and garbage collected.
 ui_handlers = []
 
-# Global variable to hold the last selected feature that was part of a ccLine in the UI
-last_selected = None
-last_CCLine = None
-edit_cmd_def = None
+# Global variable to hold the selected CCLine in the UI and the command target CCLine
+selected_CCLine = None
+target_CCLine = None
 
 motionTypes = ( 
     'Gears 20DP',
@@ -46,62 +47,8 @@ motionTypes = (
 )
 motionTypesDefault = motionTypes.index( 'Gears 20DP' )
 
-# Attribute constants
-CC_ATTRIBUTE_GROUP = "CCDistance_Group"
-CC_LINE_TEETH = "Teeth"
-CC_LINE_N1 = "N1"
-CC_LINE_N2 = "N2"
-CC_LINE_EC = "EC"
-CC_LINE_MOTION_TYPE = "MOTION"
-CC_LINE_PITCH_CIRCLE1 = "PC1"
-CC_LINE_PITCH_CIRCLE2 = "PC2"
-CC_LINE_OD_CIRCLE1 = "OD1"
-CC_LINE_OD_CIRCLE2 = "OD2"
-CC_LINE_TEXT = "TEXT"
-CC_LINE_MIDPT = "MIDPT"
-# Dimensions
-CC_LINE_LENGTH_DIM = "LENGTH_DIM"
-CC_LINE_PITCH_CIRCLE1_DIM = "PC1_DIM"
-CC_LINE_PITCH_CIRCLE2_DIM = "PC2_DIM"
-CC_LINE_OD_CIRCLE1_DIM = "OD1_DIM"
-CC_LINE_OD_CIRCLE2_DIM = "OD2_DIM"
-CC_LINE_TEXT_HEIGHT_DIM = "TEXT_HEIGHT"
-
-CC_LINE_PARENT_LINE = "CCLine"
-
-class CCLineData :
-    N1 = 0
-    N2 = 0
-    Teeth = 0
-    ExtraCenterIN = 0.00
-    motion = motionTypesDefault
-    ccDistIN = 0.0    # Calculated before EC is added
-    PD1 = 0.0
-    PD2 = 0.0
-    OD1 = 0.0
-    OD2 = 0.0
-
-class CCLine :
-    data = CCLineData()
-    line: adsk.fusion.SketchLine = None
-    pitchCircle1: adsk.fusion.SketchCircle = None
-    pitchCircle2: adsk.fusion.SketchCircle = None
-    ODCircle1: adsk.fusion.SketchCircle = None
-    ODCircle2: adsk.fusion.SketchCircle = None
-    # Dimensions
-    lengthDim: adsk.fusion.SketchLinearDimension = None
-    PD1Dim: adsk.fusion.SketchDiameterDimension = None
-    PD2Dim: adsk.fusion.SketchDiameterDimension = None
-    OD1Dim: adsk.fusion.SketchDiameterDimension = None
-    OD2Dim: adsk.fusion.SketchDiameterDimension = None
-    textHeight: adsk.fusion.SketchLinearDimension = None
-    # Line Label
-    textBox: adsk.fusion.SketchText = None
-    midPt: adsk.fusion.SketchPoint = None
-
 # Executed when add-in is run.
 def start():
-    global edit_cmd_def, delete_cmd_def
 
     # Create a command Definition.
     create_cmd_def = ui.commandDefinitions.addButtonDefinition(CREATE_CMD_ID, CREATE_CMD_NAME, CREATE_CMD_Description, ICON_FOLDER)
@@ -131,13 +78,11 @@ def start():
 
     # Listen for activeSelectionChanged events
     futil.add_handler( ui.commandStarting, ui_command_starting, local_handlers=ui_handlers )
-    futil.add_handler( ui.commandTerminated, ui_command_terminated, local_handlers=ui_handlers )
     futil.add_handler( ui.activeSelectionChanged, ui_selection_changed, local_handlers=ui_handlers )
     futil.add_handler( ui.markingMenuDisplaying, ui_marking_menu, local_handlers=ui_handlers )
 
 # Executed when add-in is stopped.
 def stop():
-    global edit_cmd_def
 
     # Get the various UI elements for this command
     workspace = ui.workspaces.itemById(config.WORKSPACE_ID)
@@ -171,54 +116,44 @@ def stop():
 # Function that is called when a active selection is changed in the UI.
 def ui_command_starting(args: adsk.core.ApplicationCommandEventArgs):
 
-    global last_selected
-    # futil.log(f' Command Starting={args.commandDefinition.name}')
+    global selected_CCLine, target_CCLine
+    # futil.log(f' Command Starting={args.commandDefinition.name}, selected_CCLine ={selected_CCLine}')
+
+    # If a CCLine is not selected then just return
+    if not selected_CCLine :
+        return
+
+    # Move the selected_CCLine into the target_CCLine for possible use by this command
+    # because firing a command clears the SelectCommand so the current selection
+    # must be kept or it will be set to None in ui_selection_changed()
+    # This variable is set to None in the destroy() callback of the commands
+    target_CCLine = selected_CCLine
 
     # Kill the editing of the dimensions within the CCLine
     if args.commandDefinition.name == 'Edit Sketch Dimension' :
-        if last_selected :
-            args.isCanceled = True
+        args.isCanceled = True
 
-# Function that is called when a active selection is changed in the UI.
-def ui_command_terminated(args: adsk.core.ApplicationCommandEventArgs):
-
-    global last_selected, last_CCLine
-
-    # futil.log(f' Command Terminated={args.commandDefinition.name}')
+    # Redirect the deleting of the CCLine to the deleteCCLine() command
     if args.commandDefinition.name == 'Delete' :
-        if last_selected:
-            # If the last selected item was a CCLine and now a Delete 
-            # command has just finished. Then we check if the CCLine entity
-            # was deleted and delete the entire CCLine if it was.
-            design = adsk.fusion.Design.cast(app.activeProduct)
-            ccLineList = design.findEntityByToken( last_selected )
-            # futil.log( f'   Token count = {len(ccLineList)}')
-            if len(ccLineList) == 0:
-                # futil.log( f'   ======= DELETING the ENTIRE ccLine object.')
-                delete_cmd_def = ui.commandDefinitions.itemById( DELETE_CMD_ID )
-                delete_cmd_def.execute()
+        args.isCanceled = True
+        delete_cmd_def = ui.commandDefinitions.itemById( DELETE_CMD_ID )
+        delete_cmd_def.execute()
 
 # Function that is called when a active selection is changed in the UI.
 def ui_selection_changed(args: adsk.core.ActiveSelectionEventArgs):
 
-    global last_selected, last_CCLine
+    global selected_CCLine
 
-    # futil.log(f' Selection Changed Command')
-
+    # futil.log(f' Selection Changed: at start ccLine={selected_CCLine}')
+    args.firingEvent.name
+    selected_CCLine = None
     if len( args.currentSelection ) > 0:
-        last_selected = None
+        selected_CCLine = getCCLineFromEntity( args.currentSelection[0].entity )
     
-        select = args.currentSelection[0].entity
-        
-        last_CCLine = getCCLineFromEntity( select )
-        if last_CCLine:
-            # futil.log( f' ===== New Selection IS A ccLine =====')
-            last_selected = args.currentSelection[0].entity.entityToken
+    # futil.log(f'                    at end ccLine={selected_CCLine}')
 
 # Function that is called when the marking menu is going to be displayed.
 def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
-
-    global edit_cmd_def, last_selected, last_CCLine
 
     controls = args.linearMarkingMenu.controls
 
@@ -230,6 +165,7 @@ def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
 
     editCCLineMenuItem = controls.itemById( EDIT_CMD_ID )
     if not editCCLineMenuItem:
+        edit_cmd_def = ui.commandDefinitions.itemById(EDIT_CMD_ID)
         # Find the separator before the "Edit Text" command and add our commands after it
         i = editMTextCmd.index - 1
         while i > 0:
@@ -265,7 +201,7 @@ def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
 
 # 
 def edit_command_created(args: adsk.core.CommandCreatedEventArgs):
-    global last_CCLine
+    global target_CCLine
 
     # futil.log(f'{args.command.parentCommandDefinition.name} edit_command_created()')
 
@@ -293,7 +229,7 @@ def edit_command_created(args: adsk.core.CommandCreatedEventArgs):
     extraCenter = inputs.addValueInput('extra_center', 'Extra Center', defaultLengthUnits, default_value)
 
     # Fill the inputs with the ccLine info
-    lineData = last_CCLine.data
+    lineData = target_CCLine.data
     cog1Teeth.value = lineData.N1
     cog2Teeth.value = lineData.N2
     if lineData.motion != 0 :
@@ -314,12 +250,19 @@ def delete_command_created(args: adsk.core.CommandCreatedEventArgs):
     # futil.log(f'{args.command.parentCommandDefinition.name} Delete Command Created Event')
 
     futil.add_handler(args.command.execute, delete_command_execute, local_handlers=local_handlers)
+    futil.add_handler(args.command.destroy, delete_command_destroy, local_handlers=local_handlers)
 
 def delete_command_execute(args: adsk.core.CommandEventArgs):
-    global last_CCLine
+    global target_CCLine
 
-    # futil.log(f'{args.command.parentCommandDefinition.name} Delete Command Executed Event')
-    deleteCCLine( last_CCLine )
+    futil.log(f'Delete Command Executed Event ccLine={target_CCLine}')
+    deleteCCLine( target_CCLine )
+
+def delete_command_destroy(args: adsk.core.CommandEventArgs):
+    global target_CCLine
+
+    target_CCLine = None
+
 
 # Function that is called when a user clicks the corresponding button in the UI.
 # This defines the contents of the command dialog and connects to the command related events.
@@ -369,6 +312,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # This event handler is called when the user clicks the OK button in the command dialog or 
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
+    global target_CCLine
+
     # General logging for debug.
     # futil.log(f'{args.command.parentCommandDefinition.name} Command Execute Event')
 
@@ -388,7 +333,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
     endSketchPt = None
 
     if not curveSelection:
-        ccLine = last_CCLine
+        ccLine = target_CCLine
     elif curveSelection.selectionCount == 1 and \
        curveSelection.selection(0).entity.objectType == adsk.fusion.SketchCircle.classType() :
         startSketchPt = curveSelection.selection(0).entity.centerSketchPoint
@@ -531,11 +476,13 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
+    global local_handlers, target_CCLine
+
     # General logging for debug.
     # futil.log(f'{args.command.parentCommandDefinition.name} Command Destroy Event')
 
-    global local_handlers
     local_handlers = []
+    target_CCLine = None
 
 
 def calcCCLineData( ld: CCLineData ):
@@ -643,6 +590,8 @@ def dimAndLabelCCLine( ccLine: CCLine ) :
     # Create SketchText and attach it to the C-C Line
     label = createLabelString( ld )
     textHeight = int((ld.ccDistIN + 1)) / 32.0
+    if textHeight < 0.02:
+        textHeight = 0.02
     # futil.log( f'ccDist = {ld.ccDistIN}in, Text Height = {textHeight}in')
     textHeight = textHeight * 2.54 # in cm
     cornerPt = line.startSketchPoint.geometry
@@ -656,8 +605,8 @@ def dimAndLabelCCLine( ccLine: CCLine ) :
     textBoxLines = textDef.rectangleLines
     textBaseLine = textBoxLines[0]
     TextHeightLine = textBoxLines[1]
-    midPt3D = futil.midPoint3D(textBaseLine.startSketchPoint.geometry, textBaseLine.endSketchPoint.geometry )
-    ccLine.midPt = sketch.sketchPoints.add( midPt3D )
+    # midPt3D = futil.midPoint3D(textBaseLine.startSketchPoint.geometry, textBaseLine.endSketchPoint.geometry )
+    # ccLine.midPt = sketch.sketchPoints.add( midPt3D )
 
     textPoint = futil.offsetPoint3D( TextHeightLine.startSketchPoint.geometry, -textHeight/2, textHeight/2, 0 )
     ccLine.textHeight = sketch.sketchDimensions.addDistanceDimension( TextHeightLine.startSketchPoint, TextHeightLine.endSketchPoint,
@@ -665,15 +614,17 @@ def dimAndLabelCCLine( ccLine: CCLine ) :
                                                               textPoint  )
     ccLine.textHeight.value = textHeight * 2.0
 
-    sketch.geometricConstraints.addMidPoint( ccLine.midPt, textBaseLine  )
-    sketch.geometricConstraints.addMidPoint( ccLine.midPt, line  )
-    sketch.geometricConstraints.addParallel( textBaseLine, line  )
+    # sketch.geometricConstraints.addMidPoint( ccLine.midPt, textBaseLine  )
+    # sketch.geometricConstraints.addMidPoint( ccLine.midPt, line  )
+    # sketch.geometricConstraints.addParallel( textBaseLine, line  )
     if textBaseLine.startSketchPoint.geometry.distanceTo(line.startSketchPoint.geometry) < \
         textBaseLine.startSketchPoint.geometry.distanceTo(line.endSketchPoint.geometry) :
         sketch.geometricConstraints.addCoincident( textBaseLine.startSketchPoint, line.startSketchPoint )
+        sketch.geometricConstraints.addCoincident( textBaseLine.endSketchPoint, line.endSketchPoint )
     else:
         sketch.geometricConstraints.addCoincident( textBaseLine.startSketchPoint, line.endSketchPoint )
-     
+        sketch.geometricConstraints.addCoincident( textBaseLine.endSketchPoint, line.startSketchPoint )
+
 
 def createLabelString( ld: CCLineData ) -> str:
     if ld.motion == 0:
@@ -707,8 +658,6 @@ def createCirclePair( line: adsk.fusion.SketchLine,
                       dia1IN: float, dia2IN: float, dimAngleDeg: float ) :
 
     sketch = line.parentSketch
-
-    normal = futil.sketchLineNormal( line )
 
     # Create Start point centered circle and dimension it
     startCircle = sketch.sketchCurves.sketchCircles.addByCenterRadius( line.startSketchPoint, dia1IN * 2.54 / 2 )
@@ -748,206 +697,3 @@ def modifyCCLine( ccLine: CCLine ):
     ccLine.OD1Dim.value = ld.OD1 * 2.54
     ccLine.OD2Dim.value = ld.OD2 * 2.54
 
-def isCCLine( line: adsk.fusion.SketchLine ) -> bool :
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_N1 )
-    if not attr:
-        return False
-    
-    return True
-
-def setAttribute( ent: adsk.fusion.SketchEntity, name: str, value: str ) :
-    newattr = ent.attributes.add( CC_ATTRIBUTE_GROUP, name, value )
-    if not newattr:
-        futil.log(f'  ======== Adding attribute {name} = {value} FAILED!!')
-
-def setAttributeList( ents: list[adsk.fusion.SketchEntity], name: str, value: str ) :
-    for ent in ents:
-        # futil.log(f'Setting attribute {name} on {ent.entityToken}')
-        newattr = ent.attributes.add( CC_ATTRIBUTE_GROUP, name, value )
-        if not newattr:
-            futil.log(f'  ======== Adding attribute {name} = {value} FAILED!!')
-
-def setCCLineAttributes( ccLine: CCLine ) :
-    line = ccLine.line
-    ld = ccLine.data
-
-    # Set the data attributes
-    setAttribute( line, CC_LINE_N1, str(ld.N1) )
-    setAttribute( line, CC_LINE_N2, str(ld.N2) )
-    setAttribute( line, CC_LINE_TEETH, str(ld.Teeth) )
-    setAttribute( line, CC_LINE_EC, str(ld.ExtraCenterIN) )
-    setAttribute( line, CC_LINE_MOTION_TYPE, str(ld.motion) )
-
-    # Set the end circle tokens
-    setAttribute( line, CC_LINE_PITCH_CIRCLE1, ccLine.pitchCircle1.entityToken )
-    setAttribute( line, CC_LINE_PITCH_CIRCLE2, ccLine.pitchCircle2.entityToken )
-    setAttribute( line, CC_LINE_OD_CIRCLE1, ccLine.ODCircle1.entityToken )
-    setAttribute( line, CC_LINE_OD_CIRCLE2, ccLine.ODCircle2.entityToken )
-
-    # Set the TextBox token
-    setAttribute( line, CC_LINE_TEXT, ccLine.textBox.entityToken )
-    setAttribute( line, CC_LINE_MIDPT, ccLine.midPt.entityToken )
-
-    # Set the dimension tokens
-    setAttribute( line, CC_LINE_LENGTH_DIM, ccLine.lengthDim.entityToken )
-    setAttribute( line, CC_LINE_PITCH_CIRCLE1_DIM, ccLine.PD1Dim.entityToken )
-    setAttribute( line, CC_LINE_PITCH_CIRCLE2_DIM, ccLine.PD2Dim.entityToken )
-    setAttribute( line, CC_LINE_OD_CIRCLE1_DIM, ccLine.OD1Dim.entityToken )
-    setAttribute( line, CC_LINE_OD_CIRCLE2_DIM, ccLine.OD2Dim.entityToken )
-    setAttribute( line, CC_LINE_TEXT_HEIGHT_DIM, ccLine.textHeight.entityToken )
-
-    # futil.print_Attributes( line )
-
-    # Set the line as the parent to all the child entities
-    setAttributeList( [ccLine.pitchCircle1, ccLine.pitchCircle2, ccLine.ODCircle1, ccLine.ODCircle2,
-                       ccLine.PD1Dim, ccLine.PD2Dim, ccLine.OD1Dim, ccLine.OD2Dim, ccLine.lengthDim,
-                       ccLine.textBox, ccLine.textHeight, ccLine.midPt],
-                       CC_LINE_PARENT_LINE, line.entityToken )
-    textDef: adsk.fusion.MultiLineTextDefinition = ccLine.textBox.definition
-    for tbline in textDef.rectangleLines:
-        setAttribute( tbline,  CC_LINE_PARENT_LINE, line.entityToken )
-
-    # futil.print_Attributes( ccLine.pitchCircle1 )
-
-def getLineData( line: adsk.fusion.SketchLine ) -> CCLineData :
-
-    cclineData = CCLineData()
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_N1 )
-    if not attr:
-        return None
-    
-    cclineData.N1 = int(attr.value)
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_N2 )
-    cclineData.N2 = int(attr.value)
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_TEETH )
-    cclineData.Teeth = int(attr.value)
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_EC )
-    cclineData.ExtraCenterIN = float(attr.value)
-    attr = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_MOTION_TYPE )
-    cclineData.motion = int(attr.value)
-
-    return cclineData
-
-# Returns the parent line of the CCLine or None if not a member of a CCLine
-def getParentLine( curve: adsk.fusion.SketchCurve ) -> adsk.fusion.SketchLine :
-    if not curve:
-        return None
-    
-    # Check to see if the curve has the CC_LINE_PARENT_LINE attribute set
-    try:
-        token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_PARENT_LINE )
-    except:
-        return None
-    
-    if not token:
-        # No parent line set.  Check if this is the actual CCLine by looking for N1
-        token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_N1 )
-        if not token:
-            return None
-        else:
-            return curve
-    
-    # Get the Parent Line and return it if it exists
-    line = curve.parentSketch.parentComponent.parentDesign.findEntityByToken( token.value )
-    if len(line) == 0:
-        return None
-    
-    return line[0]
-    
-def getChildCircles( line: adsk.fusion.SketchLine ) -> list[adsk.fusion.SketchCircle] :
-
-    design = line.parentSketch.parentComponent.parentDesign
-
-    attrNames = [ CC_LINE_PITCH_CIRCLE1, CC_LINE_PITCH_CIRCLE2, CC_LINE_OD_CIRCLE1, CC_LINE_OD_CIRCLE2 ]
-
-    circles = []
-    i = 0
-    while i < len(attrNames):
-        token = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, attrNames[i] )
-        circle = design.findEntityByToken( token.value )
-        if len( circle ) == 0:
-            futil.log(f'Error getting child circles of line...')
-            return None
-        circles.append( circle[0] )
-        i += 1
-
-    return circles
-
-def getChildEntity( line: adsk.fusion.SketchLine, attribute: str ) :
-
-    design = line.parentSketch.parentComponent.parentDesign
-
-    token = line.attributes.itemByName( CC_ATTRIBUTE_GROUP, attribute )
-    if not token:
-        futil.log(f'Error getting attribute "{attribute}" from line')
-
-    ents = design.findEntityByToken( token.value )
-    if len( ents ) == 0:
-        futil.log(f'Error getting child entity "{attribute}"')
-        return None
-    
-    return ents[0]
-
-def getCCLineFromEntity( curve: adsk.fusion.SketchCurve ) -> CCLine :
-    ccLine = CCLine()
-
-    # futil.log(f'getCCLineFromEntity --- ')
-    # futil.print_Attributes( curve )
-
-    ccLine.line = getParentLine( curve )
-    if not ccLine.line:
-        return None
-
-    # Get the associated data from the line attributes
-    ccLine.data = getLineData( ccLine.line )
-
-    circles = getChildCircles( ccLine.line )
-    if len(circles) != 4:
-        futil.log( f'Error getting child circle data.')
-        return ccLine
-    
-    ccLine.pitchCircle1 = circles[0]
-    ccLine.pitchCircle2 = circles[1]
-    ccLine.ODCircle1 = circles[2]
-    ccLine.ODCircle2 = circles[3]
-
-    ccLine.lengthDim = getChildEntity( ccLine.line, CC_LINE_LENGTH_DIM )
-    ccLine.PD1Dim = getChildEntity( ccLine.line, CC_LINE_PITCH_CIRCLE1_DIM )
-    ccLine.PD2Dim = getChildEntity( ccLine.line, CC_LINE_PITCH_CIRCLE2_DIM )
-    ccLine.OD1Dim = getChildEntity( ccLine.line, CC_LINE_OD_CIRCLE1_DIM )
-    ccLine.OD2Dim = getChildEntity( ccLine.line, CC_LINE_OD_CIRCLE2_DIM )
-    ccLine.textBox = getChildEntity( ccLine.line, CC_LINE_TEXT )
-    ccLine.midPt = getChildEntity( ccLine.line, CC_LINE_MIDPT )
-    ccLine.textHeight = getChildEntity( ccLine.line, CC_LINE_TEXT_HEIGHT_DIM )
-
-    return ccLine
-    
-def deleteCCLine( ccLine: CCLine ):
-    try:
-        ccLine.pitchCircle1.deleteMe()
-    except:
-        None
-    try:
-        ccLine.pitchCircle2.deleteMe()
-    except:
-        None
-    try:
-        ccLine.ODCircle1.deleteMe()
-    except:
-        None
-    try:
-        ccLine.ODCircle2.deleteMe()
-    except:
-        None
-    try:
-        ccLine.textBox.deleteMe()
-    except:
-        None
-    try:
-        ccLine.line.deleteMe()
-    except:
-        None
-    try:
-        ccLine.midPt.deleteMe()
-    except:
-        None
