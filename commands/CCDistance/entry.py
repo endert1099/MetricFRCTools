@@ -9,9 +9,16 @@ ui = app.userInterface
 
 
 # TODO *** Specify the command identity information. ***
-CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceDialog'
-CMD_NAME = 'C-C Distance'
-CMD_Description = 'Determine pitch diameters and C-C distances'
+CREATE_CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceDialog'
+CREATE_CMD_NAME = 'C-C Distance'
+CREATE_CMD_Description = 'Determine pitch diameters and C-C distances'
+
+EDIT_CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceEdit'
+EDIT_CMD_NAME = 'Edit C-C Distance'
+EDIT_CMD_Description = 'Edit existing C-C Distance Object'
+
+DELETE_CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceDelete'
+DELETE_CMD_NAME = 'Delete C-C Distance'
 
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = True
@@ -30,7 +37,7 @@ ui_handlers = []
 # Global variable to hold the last selected feature that was part of a ccLine in the UI
 last_selected = None
 last_CCLine = None
-command_reran = False
+edit_cmd_def = None
 
 motionTypes = ( 
     'Gears 20DP',
@@ -94,11 +101,17 @@ class CCLine :
 
 # Executed when add-in is run.
 def start():
+    global edit_cmd_def, delete_cmd_def
+
     # Create a command Definition.
-    cmd_def = ui.commandDefinitions.addButtonDefinition(CMD_ID, CMD_NAME, CMD_Description, ICON_FOLDER)
+    create_cmd_def = ui.commandDefinitions.addButtonDefinition(CREATE_CMD_ID, CREATE_CMD_NAME, CREATE_CMD_Description, ICON_FOLDER)
+    edit_cmd_def = ui.commandDefinitions.addButtonDefinition(EDIT_CMD_ID, EDIT_CMD_NAME, EDIT_CMD_Description, ICON_FOLDER)
+    delete_cmd_def = ui.commandDefinitions.addButtonDefinition(DELETE_CMD_ID, DELETE_CMD_NAME, "Delete CCLine", ICON_FOLDER)
 
     # Define an event handler for the command created event. It will be called when the button is clicked.
-    futil.add_handler(cmd_def.commandCreated, command_created)
+    futil.add_handler(create_cmd_def.commandCreated, command_created)
+    futil.add_handler(edit_cmd_def.commandCreated, edit_command_created)
+    futil.add_handler(delete_cmd_def.commandCreated, delete_command_created)
 
     # ******** Add a button into the UI so the user can run the command. ********
     # Get the target workspace the button will be created in.
@@ -111,22 +124,29 @@ def start():
     submenu = panel.controls.itemById( config.DROPDOWN_ID )
 
     # Create the button command control in the UI.
-    control = submenu.controls.addCommand(cmd_def)
+    control = submenu.controls.addCommand(create_cmd_def)
 
     # Specify if the command is promoted to the main toolbar. 
     control.isPromoted = IS_PROMOTED
 
     # Listen for activeSelectionChanged events
+    futil.add_handler( ui.commandStarting, ui_command_starting, local_handlers=ui_handlers )
+    futil.add_handler( ui.commandTerminated, ui_command_terminated, local_handlers=ui_handlers )
     futil.add_handler( ui.activeSelectionChanged, ui_selection_changed, local_handlers=ui_handlers )
+    futil.add_handler( ui.markingMenuDisplaying, ui_marking_menu, local_handlers=ui_handlers )
 
 # Executed when add-in is stopped.
 def stop():
+    global edit_cmd_def
+
     # Get the various UI elements for this command
     workspace = ui.workspaces.itemById(config.WORKSPACE_ID)
     panel = workspace.toolbarPanels.itemById(config.SKETCH_CREATE_ID)
     submenu = panel.controls.itemById( config.DROPDOWN_ID )
-    command_control = submenu.controls.itemById(CMD_ID)
-    command_definition = ui.commandDefinitions.itemById(CMD_ID)
+    command_control = submenu.controls.itemById(CREATE_CMD_ID)
+    command_definition = ui.commandDefinitions.itemById(CREATE_CMD_ID)
+    edit_cmd_def = ui.commandDefinitions.itemById(EDIT_CMD_ID)
+    delete_cmd_def = ui.commandDefinitions.itemById(DELETE_CMD_ID)
 
     # Delete the button command control
     if command_control:
@@ -137,72 +157,176 @@ def stop():
     if command_definition:
         command_definition.deleteMe()
 
+    # Delete the edit command definition
+    if edit_cmd_def:
+        edit_cmd_def.deleteMe()
+
+    # Delete the delete command definition
+    if delete_cmd_def:
+        delete_cmd_def.deleteMe()
+
     global ui_handlers
     ui_handlers = []
 
 # Function that is called when a active selection is changed in the UI.
+def ui_command_starting(args: adsk.core.ApplicationCommandEventArgs):
+
+    global last_selected
+    # futil.log(f' Command Starting={args.commandDefinition.name}')
+
+    # Kill the editing of the dimensions within the CCLine
+    if args.commandDefinition.name == 'Edit Sketch Dimension' :
+        if last_selected :
+            args.isCanceled = True
+
+# Function that is called when a active selection is changed in the UI.
+def ui_command_terminated(args: adsk.core.ApplicationCommandEventArgs):
+
+    global last_selected, last_CCLine
+
+    # futil.log(f' Command Terminated={args.commandDefinition.name}')
+    if args.commandDefinition.name == 'Delete' :
+        if last_selected:
+            # If the last selected item was a CCLine and now a Delete 
+            # command has just finished. Then we check if the CCLine entity
+            # was deleted and delete the entire CCLine if it was.
+            design = adsk.fusion.Design.cast(app.activeProduct)
+            ccLineList = design.findEntityByToken( last_selected )
+            # futil.log( f'   Token count = {len(ccLineList)}')
+            if len(ccLineList) == 0:
+                # futil.log( f'   ======= DELETING the ENTIRE ccLine object.')
+                delete_cmd_def = ui.commandDefinitions.itemById( DELETE_CMD_ID )
+                delete_cmd_def.execute()
+
+# Function that is called when a active selection is changed in the UI.
 def ui_selection_changed(args: adsk.core.ActiveSelectionEventArgs):
 
-    global last_selected, last_CCLine, command_reran
+    global last_selected, last_CCLine
 
-    # futil.log(f' Active Command={ui.activeCommand}, hasBeenReran({command_reran})')
+    # futil.log(f' Selection Changed Command')
 
-    if len( args.currentSelection ) == 0:
-        # futil.log( f' Nothing selected.')
-        if not last_selected:
-            return
-
-
-        # If the last selected item was a CCLine and now we don't
-        # have a selection then we need to rerun this selection changed
-        # command so the deletion will be detected by findEntityByToken()
-        if not command_reran:
-            if ui.activeCommand == 'SelectCommand' :
-                command_reran = True
-                # futil.log(f'Retriggering SelectCommand!!!')
-                ui.commandDefinitions.itemById('SelectCommand').execute()
-            return
-        # Reset reran for the next time
-        command_reran = False
-        design = adsk.fusion.Design.cast(app.activeProduct)
-        ccLineList = design.findEntityByToken( last_selected )
-        # futil.log( f'   Token count = {len(ccLineList)}')
-        if len(ccLineList) == 0:
-            # futil.log( f'   The last_selected ccLine entity WAS DELETED.')
-            deleteCCLine( last_CCLine )
-
+    if len( args.currentSelection ) > 0:
         last_selected = None
-        return
     
-    select = args.currentSelection[0].entity
+        select = args.currentSelection[0].entity
+        
+        last_CCLine = getCCLineFromEntity( select )
+        if last_CCLine:
+            # futil.log( f' ===== New Selection IS A ccLine =====')
+            last_selected = args.currentSelection[0].entity.entityToken
 
-    try:
-        len(select.attributes)
-    except:
-        return
-    
-    last_CCLine = getCCLineFromEntity( args.currentSelection[0].entity )
+# Function that is called when the marking menu is going to be displayed.
+def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
 
-    if not last_CCLine:
-        # futil.log( f' New Selection is not a ccLine.')
-        last_selected = None
-        return
+    global edit_cmd_def, last_selected, last_CCLine
 
-    # futil.log( f' ===== New Selection IS A ccLine =====')
-    last_selected = args.currentSelection[0].entity.entityToken
+    controls = args.linearMarkingMenu.controls
 
+    # Gather the menu items we need to control
+    editMTextCmd = controls.itemById( 'EditMTextCmd' )
+    explodeTextCmd = controls.itemById( 'ExplodeTextCmd' )
+    toggleDrivenDimCmd = controls.itemById( 'ToggleDrivenDimCmd' )
+    toggleRadialDimCmd = controls.itemById( 'ToggleRadialDimCmd' )
+
+    editCCLineMenuItem = controls.itemById( EDIT_CMD_ID )
+    if not editCCLineMenuItem:
+        # Find the separator before the "Edit Text" command and add our commands after it
+        i = editMTextCmd.index - 1
+        while i > 0:
+            control = controls.item( i )
+            if control.objectType == adsk.core.SeparatorControl.classType():
+                control = controls.item( i + 1 )
+                break
+            i -= 1
+        editCCLineMenuItem = controls.addCommand( edit_cmd_def, control.id, True )
+        editCCLineSep = controls.addSeparator( "EditCCLineSeparator", editCCLineMenuItem.id, False )
+
+    editCCLineSep = controls.itemById( "EditCCLineSeparator" )
+
+    if len(args.selectedEntities) > 0 :
+        ccLine = getCCLineFromEntity( args.selectedEntities[0] )
+        # for control in controls:
+        #     if control.objectType == adsk.core.SeparatorControl.classType():
+        #         sep: adsk.core.SeparatorControl = control
+        #         # futil.log(f'Separator = {sep.id} at index {sep.index}')
+        #     elif control.isVisible :
+        #         futil.log(f'marking menu = {control.id} ,{control.isVisible}')
+        if ccLine:
+            editCCLineMenuItem.isVisible = True
+            editCCLineSep.isVisible = True
+            editMTextCmd.isVisible = False
+            explodeTextCmd.isVisible = False
+            toggleDrivenDimCmd.isVisible = False
+            toggleRadialDimCmd.isVisible = False
+            return
+        
+    editCCLineMenuItem.isVisible = False
+    editCCLineSep.isVisible = False
+
+# 
+def edit_command_created(args: adsk.core.CommandCreatedEventArgs):
+    global last_CCLine
+
+    # futil.log(f'{args.command.parentCommandDefinition.name} edit_command_created()')
+
+    # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
+    inputs = args.command.commandInputs
+
+    # Motion Component Type
+    motionType = inputs.addDropDownCommandInput('motion_type', 'Motion Type', adsk.core.DropDownStyles.TextListDropDownStyle)
+    for mtype in motionTypes:
+        motionType.listItems.add( mtype, True, '')
+    motionType.listItems.item( motionTypesDefault ).isSelected = True
+
+    # Create a integer spinners for cog1 and cog2.
+    cog1Teeth = inputs.addIntegerSpinnerCommandInput('cog1_teeth', 'Cog #1 Teeth', 8, 100, 1, 36)
+    cog2Teeth = inputs.addIntegerSpinnerCommandInput('cog2_teeth', 'Cog #2 Teeth', 8, 100, 1, 24)
+
+    inputs.addBoolValueInput( "swap_cogs", "Swap Cogs", True )
+
+    beltTeeth = inputs.addIntegerSpinnerCommandInput( "belt_teeth", "Belt Teeth", 40, 400, 1, 70 )
+    beltTeeth.isVisible = False
+
+    # Create a value input field and set the default using 1 unit of the default length unit.
+    defaultLengthUnits = "in"
+    default_value = adsk.core.ValueInput.createByString('0.003')
+    extraCenter = inputs.addValueInput('extra_center', 'Extra Center', defaultLengthUnits, default_value)
+
+    # Fill the inputs with the ccLine info
+    lineData = last_CCLine.data
+    cog1Teeth.value = lineData.N1
+    cog2Teeth.value = lineData.N2
+    if lineData.motion != 0 :
+        beltTeeth.value = lineData.Teeth
+        beltTeeth.isVisible = True
+    extraCenter.value = lineData.ExtraCenterIN * 2.54
+    motionType.listItems.item( lineData.motion ).isSelected = True
+
+    # Connect to the events that are needed by this command.
+    futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
+    futil.add_handler(args.command.inputChanged, command_input_changed, local_handlers=local_handlers)
+    futil.add_handler(args.command.executePreview, command_preview, local_handlers=local_handlers)
+    futil.add_handler(args.command.validateInputs, command_validate_input, local_handlers=local_handlers)
+    futil.add_handler(args.command.destroy, command_destroy, local_handlers=local_handlers)
+
+def delete_command_created(args: adsk.core.CommandCreatedEventArgs):
+
+    # futil.log(f'{args.command.parentCommandDefinition.name} Delete Command Created Event')
+
+    futil.add_handler(args.command.execute, delete_command_execute, local_handlers=local_handlers)
+
+def delete_command_execute(args: adsk.core.CommandEventArgs):
+    global last_CCLine
+
+    # futil.log(f'{args.command.parentCommandDefinition.name} Delete Command Executed Event')
+    deleteCCLine( last_CCLine )
 
 # Function that is called when a user clicks the corresponding button in the UI.
 # This defines the contents of the command dialog and connects to the command related events.
 def command_created(args: adsk.core.CommandCreatedEventArgs):
 
-    global last_selected
-
-    # Clear last selected so deletion re-execution of the SelectCommand doesn't happen
-    last_selected = None
-    
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Created Event')
+    # futil.log(f'{args.command.parentCommandDefinition.name} Command Created Event')
 
     # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
@@ -220,15 +344,9 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     inputs.addBoolValueInput( "require_selection", "Require Selection", True, "", True )
 
-    # Create a value input field and set the default using 1 unit of the default length unit.
-    defaultLengthUnits = ""
-    default_value = adsk.core.ValueInput.createByString('24')
-    inputs.addValueInput('cog1_teeth', 'Cog #1 Teeth', defaultLengthUnits, default_value)
-
-    # Create a value input field and set the default using 1 unit of the default length unit.
-    defaultLengthUnits = ""
-    default_value = adsk.core.ValueInput.createByString('36')
-    inputs.addValueInput('cog2_teeth', 'Cog #2 Teeth', defaultLengthUnits, default_value)
+    # Create a integer spinners for cog1 and cog2.
+    inputs.addIntegerSpinnerCommandInput('cog1_teeth', 'Cog #1 Teeth', 8, 100, 1, 36)
+    inputs.addIntegerSpinnerCommandInput('cog2_teeth', 'Cog #2 Teeth', 8, 100, 1, 24)
 
     inputs.addBoolValueInput( "swap_cogs", "Swap Cogs", True )
 
@@ -252,7 +370,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    # futil.log(f'{args.command.parentCommandDefinition.name} Command Execute Event')
 
     ccLine = CCLine()
 
@@ -260,8 +378,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
     inputs = args.command.commandInputs
     motionType: adsk.core.DropDownCommandInput = inputs.itemById('motion_type' )
     curveSelection: adsk.core.SelectionCommandInput = inputs.itemById('curve_selection')
-    cog1TeethInp: adsk.core.ValueInput = inputs.itemById('cog1_teeth')
-    cog2TeethInp: adsk.core.ValueInput = inputs.itemById('cog2_teeth')
+    cog1TeethInp: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog1_teeth')
+    cog2TeethInp: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog2_teeth')
     swapCogs = inputs.itemById( "swap_cogs" ).value
     beltTeethInp: adsk.core.IntegerSpinnerCommandInput = inputs.itemById( "belt_teeth" )
     extraCenterInp: adsk.core.ValueInput = inputs.itemById('extra_center')
@@ -269,9 +387,9 @@ def command_execute(args: adsk.core.CommandEventArgs):
     startSketchPt = None
     endSketchPt = None
 
-    # futil.log( f'Selection count = {curveSelection.selectionCount}')
-    # futil.print_Selection( curveSelection )
-    if curveSelection.selectionCount == 1 and \
+    if not curveSelection:
+        ccLine = last_CCLine
+    elif curveSelection.selectionCount == 1 and \
        curveSelection.selection(0).entity.objectType == adsk.fusion.SketchCircle.classType() :
         startSketchPt = curveSelection.selection(0).entity.centerSketchPoint
     elif curveSelection.selectionCount == 1 and \
@@ -316,7 +434,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Preview Event')
+    # futil.log(f'{args.command.parentCommandDefinition.name} Command Preview Event')
 
     command_execute( args )
 
@@ -327,16 +445,16 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     inputs = args.inputs
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    futil.log(f'{args.firingEvent.name} Input Changed Event fired from a change to {changed_input.id}')
 
     motionType: adsk.core.DropDownCommandInput = inputs.itemById('motion_type')
     curveSelection: adsk.core.SelectionCommandInput = inputs.itemById('curve_selection')
-    cog1Teeth: adsk.core.ValueInput = inputs.itemById('cog1_teeth')
-    cog2Teeth: adsk.core.ValueInput = inputs.itemById('cog2_teeth')
+    cog1Teeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog1_teeth')
+    cog2Teeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog2_teeth')
     beltTeeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById( "belt_teeth" )
     extraCenter: adsk.core.ValueInput = inputs.itemById('extra_center')
     swapCogsInp = inputs.itemById( "swap_cogs" )
-    requireSelection = inputs.itemById( "require_selection" ).value
+    requireSelectionInp = inputs.itemById( "require_selection" )
 
     if changed_input.id == 'motion_type':
         if motionType.selectedItem.index == 0:
@@ -345,10 +463,12 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
             extraCenter.value = 0
 
     if changed_input.id == 'require_selection':
-        if requireSelection:
+        if requireSelectionInp.value:
             curveSelection.isVisible = True
+            curveSelection.setSelectionLimits( 1, 2 )
         else:
             curveSelection.isVisible = False
+            curveSelection.setSelectionLimits( 0, 2 )
             curveSelection.clearSelection()
 
     if changed_input.id == 'curve_selection':
@@ -376,25 +496,20 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
             lineData = getLineData( ccLine )
             cog1Teeth.value = lineData.N1
             cog2Teeth.value = lineData.N2
-            beltTeeth.value = lineData.Teeth
+            if lineData.motion != 0 :
+                beltTeeth.value = lineData.Teeth
             extraCenter.value = lineData.ExtraCenterIN * 2.54
             motionType.listItems.item( lineData.motion ).isSelected = True
-            if motionType.selectedItem.index == 0 :
-                beltTeeth.isVisible = False
-            else:
-                beltTeeth.isVisible = True
-
-    if changed_input.id == 'require_selection':
-        if requireSelection:
-            curveSelection.setSelectionLimits( 1, 2 )
-        else:
-            curveSelection.setSelectionLimits( 0, 2 )
+            # if motionType.selectedItem.index == 0 :
+            #     beltTeeth.isVisible = False
+            # else:
+            #     beltTeeth.isVisible = True
 
     if motionType.selectedItem.index == 0 :
         beltTeeth.isVisible = False
     else:
-        # if beltTeeth.value == 0 :
-        #     beltTeeth.value = 70
+        if beltTeeth.value == 0 :
+            beltTeeth.value = 70
         beltTeeth.isVisible = True
 
 
@@ -402,16 +517,11 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
 # which allows you to verify that all of the inputs are valid and enables the OK button.
 def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
-    futil.log(f'{CMD_NAME} Command Validate Event')
+    # futil.log(f'{args.firingEvent.name} Command Validate Event')
 
     inputs = args.inputs
-    motionType: adsk.core.DropDownCommandInput = inputs.itemById('motion_type')
-    curveSelection: adsk.core.SelectionCommandInput = inputs.itemById('curve_selection')
-    cog1Teeth: adsk.core.ValueInput = inputs.itemById('cog1_teeth')
-    cog2Teeth: adsk.core.ValueInput = inputs.itemById('cog2_teeth')
-    beltTeeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById( "belt_teeth" )
-    extraCenter: adsk.core.ValueInput = inputs.itemById('extra_center')
-    requireSelection = inputs.itemById( "require_selection" ).value
+    cog1Teeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog1_teeth')
+    cog2Teeth: adsk.core.IntegerSpinnerCommandInput = inputs.itemById('cog2_teeth')
 
     if not (cog1Teeth.value >= 8 and cog1Teeth.value < 100 and cog2Teeth.value >= 8 and cog1Teeth.value < 100 ):
         args.areInputsValid = False
@@ -422,7 +532,7 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Destroy Event')
+    # futil.log(f'{args.command.parentCommandDefinition.name} Command Destroy Event')
 
     global local_handlers
     local_handlers = []
@@ -528,12 +638,12 @@ def dimAndLabelCCLine( ccLine: CCLine ) :
     ccLine.lengthDim = sketch.sketchDimensions.addDistanceDimension( 
         line.startSketchPoint, line.endSketchPoint, 
         adsk.fusion.DimensionOrientations.AlignedDimensionOrientation, textPt )
-    ccLine.lengthDim.value = ld.ccDistIN * 2.54
+    ccLine.lengthDim.value = (ld.ccDistIN + ld.ExtraCenterIN) * 2.54
 
     # Create SketchText and attach it to the C-C Line
     label = createLabelString( ld )
     textHeight = int((ld.ccDistIN + 1)) / 32.0
-    futil.log( f'ccDist = {ld.ccDistIN}in, Text Height = {textHeight}in')
+    # futil.log( f'ccDist = {ld.ccDistIN}in, Text Height = {textHeight}in')
     textHeight = textHeight * 2.54 # in cm
     cornerPt = line.startSketchPoint.geometry
     diagPt =  futil.addPoint3D( cornerPt, adsk.core.Point3D.create( line.length, textHeight, 0 ) )
@@ -549,7 +659,7 @@ def dimAndLabelCCLine( ccLine: CCLine ) :
     midPt3D = futil.midPoint3D(textBaseLine.startSketchPoint.geometry, textBaseLine.endSketchPoint.geometry )
     ccLine.midPt = sketch.sketchPoints.add( midPt3D )
 
-    textPoint = futil.offsetPoint3D( midPt3D, -textHeight/2, textHeight/2, 0 )
+    textPoint = futil.offsetPoint3D( TextHeightLine.startSketchPoint.geometry, -textHeight/2, textHeight/2, 0 )
     ccLine.textHeight = sketch.sketchDimensions.addDistanceDimension( TextHeightLine.startSketchPoint, TextHeightLine.endSketchPoint,
                                                               adsk.fusion.DimensionOrientations.AlignedDimensionOrientation,
                                                               textPoint  )
@@ -582,19 +692,19 @@ def createLabelString( ld: CCLineData ) -> str:
     return lineLabel
 
 def createEndCircles( ccLine: CCLine ) :
-    PDcircleData = createCirclePair( ccLine.line, ccLine.data.PD1, ccLine.data.PD2 )
+    PDcircleData = createCirclePair( ccLine.line, ccLine.data.PD1, ccLine.data.PD2, 45.0 )
     ccLine.pitchCircle1 = PDcircleData[0][0]
     ccLine.pitchCircle2 = PDcircleData[0][1]
     ccLine.PD1Dim = PDcircleData[1][0]
     ccLine.PD2Dim = PDcircleData[1][1]
-    ODcircleData = createCirclePair( ccLine.line, ccLine.data.OD1, ccLine.data.OD2 )
+    ODcircleData = createCirclePair( ccLine.line, ccLine.data.OD1, ccLine.data.OD2, 135.0 )
     ccLine.ODCircle1 = ODcircleData[0][0]
     ccLine.ODCircle2 = ODcircleData[0][1]
     ccLine.OD1Dim = ODcircleData[1][0]
     ccLine.OD2Dim = ODcircleData[1][1]
 
 def createCirclePair( line: adsk.fusion.SketchLine, 
-                      dia1IN: float, dia2IN: float ) :
+                      dia1IN: float, dia2IN: float, dimAngleDeg: float ) :
 
     sketch = line.parentSketch
 
@@ -604,7 +714,11 @@ def createCirclePair( line: adsk.fusion.SketchLine,
     startCircle = sketch.sketchCurves.sketchCircles.addByCenterRadius( line.startSketchPoint, dia1IN * 2.54 / 2 )
     startCircle.isConstruction = True
 
-    textPoint = futil.offsetPoint3D( startCircle.centerSketchPoint.geometry, normal.x, normal.y, 0 )
+    dimDir = adsk.core.Vector2D.create( dia1IN * 2.54 / 5, 0 )
+    rotMatrix = adsk.core.Matrix2D.create()
+    rotMatrix.setToRotation( dimAngleDeg * math.pi / 180, adsk.core.Point2D.create() )
+    dimDir.transformBy( rotMatrix )
+    textPoint = futil.offsetPoint3D( startCircle.centerSketchPoint.geometry, dimDir.x, dimDir.y, 0 )
     diaDim1 = sketch.sketchDimensions.addDiameterDimension( startCircle, textPoint )
     diaDim1.value = dia1IN * 2.54
     # sketch.geometricConstraints.addCoincident( startCircle.centerSketchPoint, line.startSketchPoint )
@@ -613,7 +727,7 @@ def createCirclePair( line: adsk.fusion.SketchLine,
     endCircle = sketch.sketchCurves.sketchCircles.addByCenterRadius( line.endSketchPoint, dia2IN * 2.54 / 2 )
     endCircle.isConstruction = True
 
-    textPoint = futil.offsetPoint3D( endCircle.centerSketchPoint.geometry, normal.x, normal.y, 0 )
+    textPoint = futil.offsetPoint3D( endCircle.centerSketchPoint.geometry, dimDir.x, dimDir.y, 0 )
     diaDim2 = sketch.sketchDimensions.addDiameterDimension( endCircle, textPoint )
     diaDim2.value = dia2IN * 2.54
     # sketch.geometricConstraints.addCoincident( endCircle.centerSketchPoint, line.endSketchPoint )
@@ -716,7 +830,9 @@ def getLineData( line: adsk.fusion.SketchLine ) -> CCLineData :
 
 # Returns the parent line of the CCLine or None if not a member of a CCLine
 def getParentLine( curve: adsk.fusion.SketchCurve ) -> adsk.fusion.SketchLine :
-
+    if not curve:
+        return None
+    
     # Check to see if the curve has the CC_LINE_PARENT_LINE attribute set
     token = curve.attributes.itemByName( CC_ATTRIBUTE_GROUP, CC_LINE_PARENT_LINE )
     if not token:
