@@ -95,7 +95,10 @@ def print_Point3D( pt: adsk.core.Point3D, prefix: str = "" ) :
     log( f'{prefix} {format_Point3D( pt )}' )
 
 def format_Point3D( pt: adsk.core.Point3D ) :
-    return f'({pt.x:.3},{pt.y:.3},{pt.z:.3})'
+    return f'({pt.x:.4},{pt.y:.4},{pt.z:.4})'
+
+def format_Vector3D( v: adsk.core.Vector3D ) :
+    return f'({v.x:.4},{v.y:.4},{v.z:.4})'
 
 def print_SketchCurve( curve: adsk.fusion.SketchCurve ) :
     if curve.objectType == adsk.fusion.SketchLine.classType() :
@@ -115,6 +118,25 @@ def print_SketchCurve( curve: adsk.fusion.SketchCurve ) :
         log(f'print_SketchCurve() --> {curve.objectType} Not handled.')
     log(f'    is2D({curve.is2D}), isDeletable({curve.isDeletable}), isFixed({curve.isFixed}), isFullyConstrained({curve.isFullyConstrained})')
     log(f'    isLinked({curve.isLinked}), isReference({curve.isReference}), isValid({curve.isValid}), isVisible({curve.isVisible})')
+
+def print_Curve3D( curve: adsk.core.Curve3D ) :
+    if curve.objectType == adsk.core.Line3D.classType() :
+        line: adsk.core.Line3D = curve
+        log(f'Line3D: {format_Point3D(line.startPoint)} -- {format_Point3D(line.endPoint)}')
+    elif curve.objectType == adsk.core.Arc3D.classType() :
+        arc: adsk.core.Arc3D = curve
+        str = f'Arc3D: {format_Point3D(arc.startPoint)} -- {format_Point3D(arc.endPoint)}'
+        str += f', R={arc.radius:.4}'
+        log(str)
+    elif curve.objectType == adsk.core.Circle3D.classType() :
+        circle: adsk.core.Circle3D = curve
+        str = f'Circle3D: C{format_Point3D(circle.center)}, '
+        str += f'radius = {circle.radius}, normal={format_Vector3D(circle.normal)}'
+        log(str)
+    else :
+        log(f'print_Curve3D() --> {curve.objectType} Not handled.')
+    # log(f'    is2D({curve.is2D}), isDeletable({curve.isDeletable}), isFixed({curve.isFixed}), isFullyConstrained({curve.isFullyConstrained})')
+    # log(f'    isLinked({curve.isLinked}), isReference({curve.isReference}), isValid({curve.isValid}), isVisible({curve.isVisible})')
 
 def print_Attributes( entity: adsk.fusion.SketchEntity ) :
     log(f'Entity {entity.objectType} has {len(entity.attributes)} attributes')

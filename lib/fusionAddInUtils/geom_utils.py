@@ -48,6 +48,12 @@ def sketchLineUnitVec( line: adsk.fusion.SketchLine ) -> adsk.core.Vector2D :
         toPoint2D(line.startSketchPoint.geometry),
         toPoint2D(line.endSketchPoint.geometry) )
 
+def make_Midpt( line: adsk.fusion.SketchLine ) -> adsk.core.Point3D :
+    startpt = line.startSketchPoint.geometry
+    endpt = line.endSketchPoint.geometry
+
+    return midPoint3D( startpt, endpt )
+
 # Determines if a point in the plane is to the right of a line.
 # Determined as though sitting on the start point looking at the end point
 def toTheRightOf( line: adsk.core.Line2D, pt: adsk.core.Point2D  ) -> bool :

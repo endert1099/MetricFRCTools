@@ -157,11 +157,14 @@ def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
 
     controls = args.linearMarkingMenu.controls
 
-    # Gather the menu items we need to control
+    # Gather the Mtext command
     editMTextCmd = controls.itemById( 'EditMTextCmd' )
-    explodeTextCmd = controls.itemById( 'ExplodeTextCmd' )
-    toggleDrivenDimCmd = controls.itemById( 'ToggleDrivenDimCmd' )
-    toggleRadialDimCmd = controls.itemById( 'ToggleRadialDimCmd' )
+
+    # Make a list of the controls to turn off
+    hideCtrls = [editMTextCmd]
+    hideCtrls.append( controls.itemById( 'ExplodeTextCmd' ) )
+    hideCtrls.append( controls.itemById( 'ToggleDrivenDimCmd' ) )
+    hideCtrls.append( controls.itemById( 'ToggleRadialDimCmd' ) )
 
     editCCLineMenuItem = controls.itemById( EDIT_CMD_ID )
     if not editCCLineMenuItem:
@@ -190,10 +193,11 @@ def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
         if ccLine:
             editCCLineMenuItem.isVisible = True
             editCCLineSep.isVisible = True
-            editMTextCmd.isVisible = False
-            explodeTextCmd.isVisible = False
-            toggleDrivenDimCmd.isVisible = False
-            toggleRadialDimCmd.isVisible = False
+            for ctrl in hideCtrls:
+                try:
+                    ctrl.isVisible = False
+                except:
+                    None
             return
         
     editCCLineMenuItem.isVisible = False
