@@ -91,6 +91,10 @@ def print_OrientedBB( orientedBB: adsk.core.OrientedBoundingBox3D ) :
     log(f'   height = {orientedBB.height}, length={orientedBB.length}, width={orientedBB.width}')
     print_Point3D( orientedBB.centerPoint, "   centerPt: ")
 
+def print_BBox( bbox: adsk.core.BoundingBox3D ) :
+    log(f'item type = {bbox.objectType}, isValid={bbox.isValid}')
+    log(f'   minPt = {format_Point3D(bbox.minPoint)}, maxPt={format_Point3D(bbox.maxPoint)}')
+
 def print_Point3D( pt: adsk.core.Point3D, prefix: str = "" ) :
     log( f'{prefix} {format_Point3D( pt )}' )
 

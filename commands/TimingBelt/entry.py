@@ -4,6 +4,8 @@ import os
 import math
 from ...lib import fusionAddInUtils as futil
 from ... import config
+from ...lib.CCLine import *
+
 app = adsk.core.Application.get()
 ui = app.userInterface
 
@@ -77,14 +79,15 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     inputs = args.command.commandInputs
 
     # Create a Sketch Curve selection input.
-    pitchLineSelection = inputs.addSelectionInput('belt_pitch_line', 'Pitch Line', 'Select the belt pitch line')
+    pitchLineSelection = inputs.addSelectionInput('belt_pitch_circles', 'End Circles', 'Select a C-C Line or end circles')
     pitchLineSelection.addSelectionFilter( "SketchCurves" )
-    pitchLineSelection.setSelectionLimits( 2, 4 )
+    pitchLineSelection.setSelectionLimits( 1, 2 )
 
     # Create a simple text box input.
     belt_type = inputs.addDropDownCommandInput('belt_type', 'Timing Belt Type', adsk.core.DropDownStyles.TextListDropDownStyle)
     belt_type.listItems.add('HTD 5mm Pitch', True, '')
     belt_type.listItems.add('GT2 3mm Pitch', False, '')
+    belt_type.isEnabled = False
 
     # Create a value input field and set the default using 1 unit of the default length unit.
     defaultLengthUnits = "mm"
@@ -107,7 +110,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     # Get a reference to your command's inputs.
     inputs = args.command.commandInputs
-    pitchLineSelection: adsk.core.SelectionCommandInput = inputs.itemById('belt_pitch_line')
+    pitchLineSelection: adsk.core.SelectionCommandInput = inputs.itemById('belt_pitch_circles')
     belt_width: adsk.core.ValueCommandInput = inputs.itemById('belt_width')
     belt_type: adsk.core.DropDownCommandInput = inputs.itemById('belt_type')
     futil.log(f'Selection count is {pitchLineSelection.selectionCount}...')
@@ -129,6 +132,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
     workingComp = workingOcc.component
     # Create a new sketch for the belt on the same plane
     sketch = workingComp.sketches.add( originalSketch.referencePlane, workingOcc )
+    sketch.name = 'TimingBelt'
 
     if belt_type.selectedItem.index == 0:
         beltPitchLength = 5
@@ -139,31 +143,29 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
 
     # Determine if two circles are selected or a pitch loop is selected
-    curves = []
     pathCurves = adsk.core.ObjectCollection.create()
     if userSelections[0].objectType == adsk.fusion.SketchCircle.classType():
-        i = 0
-        while i < len(userSelections):
-            newCurve = sketch.include( userSelections[i] )
-            newCurve.item(0).isConstruction = True
-            i += 1
-        PitchLoop = createPitchLoopFromCircles( sketch )
+        c1 = userSelections[0].geometry
+        c2 = userSelections[1].geometry
+        PitchLoop = createPitchLoopFromCircles( sketch, c1, c2 )
+
+        futil.log(f'path curves len = {PitchLoop.count}')
         for curve in PitchLoop:
             pathCurves.add( curve.createForAssemblyContext(workingOcc))
-            curves.append( curve )
     else :
-        PitchLoop = originalSketch.findConnectedCurves( userSelections[0] )
-        for curve in PitchLoop:
-            newCurve = sketch.include( curve )
-            newCurve.item(0).isConstruction = True
-            pathCurves.add( curve )
-            curves.append( newCurve.item(0) )
+        return
+        # PitchLoop = originalSketch.findConnectedCurves( userSelections[0] )
+        # for curve in PitchLoop:
+        #     newCurve = sketch.include( curve )
+        #     newCurve.item(0).isConstruction = True
+        #     pathCurves.add( curve )
+        #     curves.append( newCurve.item(0) )
     
     # futil.log( "Path Curves ::")
     # futil.print_SketchObjectCollection( pathCurves )
 
     curveLength = 0.0
-    for curve in curves:
+    for curve in pathCurves:
         curveLength += curve.length
 
     toothCount = int( (curveLength * 10 / beltPitchLength) + 0.5 )
@@ -181,6 +183,10 @@ def command_execute(args: adsk.core.CommandEventArgs):
     half_belt_thickness = adsk.core.ValueInput.createByReal( beltThickness / 2 ) # half of thickness
 
     geoConstraints = sketch.geometricConstraints
+    curves = []
+    for curve in PitchLoop:
+        curves.append( curve )
+
     offsetInput = geoConstraints.createOffsetInput( curves, half_belt_thickness )
     geoConstraints.addTwoSidesOffset( offsetInput, True )
 
@@ -218,27 +224,57 @@ def command_execute(args: adsk.core.CommandEventArgs):
     geoConstraints.addCollinear( baseLine, lineCurve )
 
     if args.firingEvent.name == "OnExecutePreview" :
+        # Don't extrude and pattern on path if previewing just do the belt outline.
+        extrudeBeltPreview( sketch, pathCurves, belt_width.value )
         return
     
     extrudeBelt( sketch, pathCurves, belt_width.value, toothCount, beltPitchLength )
 
 
-def extrudeBelt( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection,
-                beltWidth: float, toothCount: int, beltPitchMM: int ) :
+def extrudeBeltPreview( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection, beltWidth: float ) :
 
-    sketch.parentComponent
     workingComp = sketch.parentComponent
 
     # Determine the profiles of the belt and tooth
     maxArea = 0
     minArea = 9999999
-    insideLoop = None
     i = 0
     while i < sketch.profiles.count:
         profile = sketch.profiles.item(i)
         if profile.areaProperties().area > maxArea:
             maxArea = profile.areaProperties().area
-            insideLoop = profile.profileLoops.item(0)
+        if profile.areaProperties().area < minArea:
+            minArea = profile.areaProperties().area
+        i += 1
+
+    beltLoop = None
+    profileLoop = None
+    i = 0
+    while i < sketch.profiles.count:
+        profile = sketch.profiles.item(i)
+        if profile.areaProperties().area > minArea and profile.areaProperties().area < maxArea:
+            beltLoop = profile
+        elif profile.areaProperties().area < maxArea:
+            profileLoop = profile
+        i += 1
+
+    extrudes = workingComp.features.extrudeFeatures
+    beltWidthValue = adsk.core.ValueInput.createByReal( beltWidth )
+    extrudes.addSimple(beltLoop, beltWidthValue, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+
+def extrudeBelt( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection,
+                beltWidth: float, toothCount: int, beltPitchMM: int ) :
+
+    workingComp = sketch.parentComponent
+
+    # Determine the profiles of the belt and tooth
+    maxArea = 0
+    minArea = 9999999
+    i = 0
+    while i < sketch.profiles.count:
+        profile = sketch.profiles.item(i)
+        if profile.areaProperties().area > maxArea:
+            maxArea = profile.areaProperties().area
         if profile.areaProperties().area < minArea:
             minArea = profile.areaProperties().area
         i += 1
@@ -265,9 +301,9 @@ def extrudeBelt( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection,
     toothCountVI = adsk.core.ValueInput.createByReal( toothCount )
     patternCollection = adsk.core.ObjectCollection.create()
     patternCollection.add( extrudeTooth )
-    
+
 #    pathCurves = sketch.findConnectedCurves( originalConnectedCurves.item(0) )
-#    futil.print_SketchObjectCollection( pathCurves )
+    futil.print_SketchObjectCollection( path )
     patternPath = adsk.fusion.Path.create( path, adsk.fusion.ChainedCurveOptions.noChainedCurves )
 #    patternPath = adsk.fusion.Path.create( originalConnectedCurves.item(0), adsk.fusion.ChainedCurveOptions.connectedChainedCurves )
     toothPatternInput = pathPatterns.createInput( 
@@ -294,8 +330,41 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     inputs = args.inputs
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
+    pitchLineSelection: adsk.core.SelectionCommandInput = inputs.itemById('belt_pitch_circles')
+    belt_type: adsk.core.DropDownCommandInput = inputs.itemById('belt_type')
+
+    if changed_input.id == 'belt_pitch_circles' :
+        if pitchLineSelection.selectionCount == 1:
+            ccLine = getCCLineFromEntity( pitchLineSelection.selection(0).entity )
+            if ccLine :
+                pitchLineSelection.clearSelection()
+                if ccLine.data.motion != 0 :
+                    belt_type.listItems.item( ccLine.data.motion - 1).isSelected = True
+                    belt_type.isEnabled = False
+                    pitchLineSelection.addSelection( ccLine.pitchCircle1 )
+                    pitchLineSelection.addSelection( ccLine.pitchCircle2 )
+            else :
+                belt_type.isEnabled = True
+        if pitchLineSelection.selectionCount == 3 and belt_type.isEnabled == False :
+            # Another entity was selected when a ccLine is selected.
+            newEntity = pitchLineSelection.selection(2).entity
+            ccLine = getCCLineFromEntity( newEntity )
+
+            if ccLine :
+                # The new selection is another ccLine (or the same one)
+                pitchLineSelection.clearSelection()
+                if ccLine.data.motion != 0 :
+                    belt_type.listItems.item( ccLine.data.motion - 1).isSelected = True
+                    belt_type.isEnabled = False
+                    pitchLineSelection.addSelection( ccLine.pitchCircle1 )
+                    pitchLineSelection.addSelection( ccLine.pitchCircle2 )
+            else :
+                # The new selection is not a ccLine
+                pitchLineSelection.clearSelection()
+                pitchLineSelection.addSelection( newEntity )
+                belt_type.isEnabled = True
 
 # This event handler is called when the user interacts with any of the inputs in the dialog
 # which allows you to verify that all of the inputs are valid and enables the OK button.
@@ -303,7 +372,7 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
     inputs = args.inputs
 
-    pitchLineSelection: adsk.core.SelectionCommandInput = inputs.itemById('belt_pitch_line')
+    pitchLineSelection: adsk.core.SelectionCommandInput = inputs.itemById('belt_pitch_circles')
     
     parentSketch: adsk.fusion.Sketch = pitchLineSelection.selection(0).entity.parentSketch
     connectedCurves = parentSketch.findConnectedCurves( pitchLineSelection.selection(0).entity )
@@ -316,11 +385,11 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
     inputs = args.inputs
     
     # Verify the validity of the input values. This controls if the OK button is enabled or not.
-    valueInput = inputs.itemById('belt_width')
+    beltWidth = inputs.itemById('belt_width')
 
-    futil.log(f'{CMD_NAME} Validate:: num selected = {pitchLineSelection.selectionCount}')
+    # futil.log(f'{CMD_NAME} Validate:: num selected = {pitchLineSelection.selectionCount}')
 
-    if valueInput.value >= 0 and ((pitchLineSelection.selectionCount == 2) or (pitchLineSelection.selectionCount == 4)):
+    if abs(beltWidth.value) > 0.01 and pitchLineSelection.selectionCount == 2:
         args.areInputsValid = True
     else:
         args.areInputsValid = False
@@ -465,13 +534,17 @@ def createGT2_3mmProfile( parentSketch: adsk.fusion.Sketch ):
 
     return baseLine
 
-def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch ) :
+def createPitchLoopFromCircles( sketch: adsk.fusion.Sketch, 
+                               c1: adsk.core.Circle3D, c2: adsk.core.Circle3D ) -> adsk.core.ObjectCollection :
     geoConstraints = sketch.geometricConstraints
 
-    # Create the pitch line curves from two circles
-    circle1: adsk.fusion.SketchCircle = sketch.sketchCurves.item(0)
-    circle2: adsk.fusion.SketchCircle = sketch.sketchCurves.item(1)
+    # Create the end circles in the sketch
+    circle1 = sketch.sketchCurves.sketchCircles.addByCenterRadius( c1.center, c1.radius )
+    circle1.isConstruction = True
+    circle2 = sketch.sketchCurves.sketchCircles.addByCenterRadius( c2.center, c2.radius )
+    circle2.isConstruction = True
 
+    # Create pitch line curves from two circles
     CLstartPt = futil.toPoint2D( circle1.centerSketchPoint.geometry )
     CLendPt = futil.toPoint2D( circle2.centerSketchPoint.geometry )
     CLnormal = futil.lineNormal( CLstartPt, CLendPt )
@@ -533,7 +606,7 @@ def findToothAnchor( insideLoop: adsk.fusion.ProfileLoop ) :
     centroid = futil.BBCentroid( bbox )
  
     lineCurve: adsk.fusion.SketchLine = None
-    lineNormal = adsk.core.Point2D.create()
+    lineNormal = adsk.core.Vector2D.create()
     toothAnchorPoint = adsk.fusion.SketchPoint = None
     i = 0
     while i < insideLoop.profileCurves.count:

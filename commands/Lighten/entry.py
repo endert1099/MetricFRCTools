@@ -8,8 +8,7 @@ from ... import config
 app = adsk.core.Application.get()
 ui = app.userInterface
 
-
-# TODO *** Specify the command identity information. ***
+#  *** Specify the command identity information. ***
 CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_LightenDialog'
 CMD_NAME = 'Lighten'
 CMD_Description = 'Lighten a solid by pocketing'
@@ -28,13 +27,18 @@ local_handlers = []
 # Class to hold lighten profile info
 class LightenProfile:
     profile: adsk.fusion.Profile = None
+    offsetDist: float = 0.0
     filletRadius: float = 0.0
     outerLoop: adsk.fusion.ProfileLoop = None
     centroid: adsk.core.Point3D = None
     area: float = 0.0
 
-    def __init__(self, profile: adsk.fusion.Profile, radius: float ):
+    isComputed: bool = False
+    filletedLoop: adsk.core.ObjectCollection = None
+
+    def __init__(self, profile: adsk.fusion.Profile, offset: float, radius: float ):
         self.profile = profile
+        self.offsetDist = offset
         self.filletRadius = radius
         for loop in self.profile.profileLoops:
             if loop.isOuter:
@@ -44,6 +48,9 @@ class LightenProfile:
         self.centroid = self.profile.areaProperties().centroid
         self.area = self.profile.areaProperties().area
 
+# Global list of the lighten profiles
+lightenProfileList: list[LightenProfile] = []
+lightenSketch: adsk.fusion.Sketch = None
 
 # Executed when add-in is run.
 def start():
@@ -66,15 +73,15 @@ def start():
     # # Create the button command control in the UI.
     control = submenu.controls.addCommand(cmd_def)
 
-    # # Specify if the command is promoted to the main toolbar. 
-    # control.isPromoted = IS_PROMOTED
+    # Specify if the command is promoted to the main toolbar. 
+    control.isPromoted = IS_PROMOTED
 
 # Executed when add-in is stopped.
 def stop():
 
     # Get the various UI elements for this command
     workspace = ui.workspaces.itemById(config.WORKSPACE_ID)
-    panel = workspace.toolbarPanels.itemById(config.SKETCH_CREATE_ID)
+    panel = workspace.toolbarPanels.itemById(config.PANEL_ID)
     submenu = panel.controls.itemById( config.DROPDOWN_ID )
     command_control = submenu.controls.itemById(CMD_ID)
     command_definition = ui.commandDefinitions.itemById(CMD_ID)
@@ -111,25 +118,32 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     profileSelection.addSelectionFilter( "Profiles" )
     profileSelection.setSelectionLimits( 1, 0 )
 
-    # Create a pocket depth value input.
+    # Create a offset distance.
     defaultLengthUnits = "in"
     default_value = adsk.core.ValueInput.createByString('0.125')
-    pocketDepth = inputs.addValueInput('pocket_depth', 'Pocket Depth', defaultLengthUnits, default_value)
-
-    inputs.addBoolValueInput( "full_depth", "Through Body", True )
+    offsetDist = inputs.addValueInput('offset_distance', 'Offset Distance', defaultLengthUnits, default_value)
 
     # Create a corner radius value input.
     defaultLengthUnits = "in"
     default_value = adsk.core.ValueInput.createByString('0.125')
     cornerRadius = inputs.addValueInput('corner_radius', 'Corner Radius', defaultLengthUnits, default_value)
 
+    # Create a pocket depth value input.
+    defaultLengthUnits = "in"
+    default_value = adsk.core.ValueInput.createByString('0.25')
+    pocketDepth = inputs.addValueInput('pocket_depth', 'Pocket Depth', defaultLengthUnits, default_value)
+
     # Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
     futil.add_handler(args.command.inputChanged, command_input_changed, local_handlers=local_handlers)
     futil.add_handler(args.command.executePreview, command_preview, local_handlers=local_handlers)
     futil.add_handler(args.command.validateInputs, command_validate_input, local_handlers=local_handlers)
+    futil.add_handler(args.command.keyDown, command_keydown, local_handlers=local_handlers)
+    futil.add_handler(args.command.keyUp, command_keyup, local_handlers=local_handlers)
     futil.add_handler(args.command.destroy, command_destroy, local_handlers=local_handlers)
 
+    global lightenProfileList
+    lightenProfileList = []
 
 # This event handler is called when the user clicks the OK button in the command dialog or 
 # is immediately called after the created event not command inputs were created for the dialog.
@@ -137,26 +151,35 @@ def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
     futil.log(f'{CMD_NAME} Command Execute Event')
 
+    global lightenProfileList
+
+    startTime = time.time()
+
     inputs = args.command.commandInputs
     solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
     profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
     pocketDepth: adsk.core.ValueCommandInput = inputs.itemById('pocket_depth')
-    isFullDepth: adsk.core.BoolValueCommandInput = inputs.itemById( "full_depth" )
-    cornerRadius: adsk.core.ValueCommandInput = inputs.itemById('corner_radius')
 
-    workingComp = solidSelection.selection(0).entity.parentComponent
-    sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
+    solid: adsk.fusion.BRepBody = solidSelection.selection(0).entity
 
-    profiles: list[LightenProfile] = []
-    i = 0
-    while i < profileSelection.selectionCount:
-        lightenProfile = LightenProfile( profileSelection.selection(i).entity, cornerRadius.value )
-        profiles.append( lightenProfile )
-        i += 1
+    for profile in lightenProfileList:
+        if not profile.isComputed :
+            offsetProfile( profile )
 
-    for profile in profiles:
-        toolProfile = offsetProfile( sketch, profile )
-        extrudeProfile( solidSelection.selection(0).entity, toolProfile )
+    workingComp = solid.parentComponent
+    sketch: adsk.fusion.Sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
+    sketch.isComputeDeferred = True
+    sketch.name = 'Lighten'
+
+    for profile in lightenProfileList:
+        if profile.isComputed:
+            Curves3DToSketch( sketch, profile.filletedLoop )
+    
+    sketch.isComputeDeferred = False
+    if sketch.profiles.count > 0 :
+        extrudeProfiles( solid, sketch, pocketDepth.value )
+
+    futil.log(f'Execute Done :: Total time = {(time.time()-startTime):.5}s')
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
@@ -172,10 +195,68 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     changed_input = args.input
     inputs = args.inputs
 
+    global lightenProfileList
+
     # General logging for debug.
     futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
+    solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
+    profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
+    cornerRadius: adsk.core.ValueCommandInput = inputs.itemById('corner_radius')
+    offsetDist: adsk.core.ValueCommandInput = inputs.itemById('offset_distance')
 
+    if changed_input.id == 'solid_selection' :
+        profileSelection.clearSelection()
+        lightenProfileList = []
+
+
+    if changed_input.id == 'profile_selection' :
+        if profileSelection.selectionCount == 0:
+            lightenProfileList = []
+        elif profileSelection.selectionCount > len(lightenProfileList) :
+            # We added a profile selection
+            i = 0
+            while i < profileSelection.selectionCount:
+                profile = profileSelection.selection(i).entity
+                existingSelection = False
+                for liteProf in lightenProfileList:
+                    if liteProf.profile == profile :
+                        futil.log(f'Found existing profile!!!')
+                        existingSelection = True
+                        break
+                if not existingSelection:
+                    futil.log(f'Adding new profile to global list .. .. .')
+                    lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
+                i += 1
+        elif profileSelection.selectionCount < len(lightenProfileList) :
+            # We removed a profile selection
+            newLPlist = []
+            for liteProf in lightenProfileList :
+                foundProfile = False
+                i = 0
+                while i < profileSelection.selectionCount:
+                    selProf = profileSelection.selection(i).entity
+                    if liteProf.profile == selProf :
+                        foundProfile = True
+                        break
+                    i += 1
+                if foundProfile :
+                    newLPlist.append( liteProf )
+                else:
+                    futil.log(f'Removing profile from global list .. .. .')
+            lightenProfileList = newLPlist
+
+    if changed_input.id == 'corner_radius' :
+        # Force recompute of the profiles
+        for lp in lightenProfileList:
+            lp.filletRadius = cornerRadius.value
+            lp.isComputed = False
+
+    if changed_input.id == 'offset_distance' :
+        # Force recompute of the profiles
+        for lp in lightenProfileList:
+            lp.offsetDist = offsetDist.value
+            lp.isComputed = False
 
 # This event handler is called when the user interacts with any of the inputs in the dialog
 # which allows you to verify that all of the inputs are valid and enables the OK button.
@@ -185,6 +266,13 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
     inputs = args.inputs
 
+def command_keydown(args: adsk.core.KeyboardEventArgs):
+    
+    futil.log(f'{CMD_NAME} KeyDown Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+
+def command_keyup(args: adsk.core.KeyboardEventArgs):
+    futil.log(f'{CMD_NAME} KeyUp Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
@@ -193,204 +281,96 @@ def command_destroy(args: adsk.core.CommandEventArgs):
     global local_handlers
     local_handlers = []
 
-def offsetProfilesTest( sketch: adsk.fusion.Sketch, faces: list[adsk.fusion.BRepFace], 
-                    templates: list[adsk.fusion.ProfileCurves] ) -> list[adsk.fusion.Profile] :
+# def offsetProfile( solid: adsk.fusion.BRepBody, profile: LightenProfile ) :
+def offsetProfile( profile: LightenProfile ) :
 
-    for profCurves in templates:
-        offsetCurves = []
-        for pcurve in profCurves:
-            # Project the Template profile curves into this sketch
-            projectObjs = sketch.project( pcurve.sketchEntity )
-            projectObjs[0].isConstruction = True
+    # Create a temporary sketch
+    workingComp = profile.profile.parentSketch.parentComponent
+    sketch: adsk.fusion.Sketch = workingComp.sketches.add( profile.profile )
+    sketch.isComputeDeferred = True
+    sketch.name = 'TempSketch'
 
-            offsetCurves.append( projectObjs[0] )
-        offset = adsk.core.ValueInput.createByReal( -0.125 * 2.54 )
-        offsetInput = sketch.geometricConstraints.createOffsetInput( offsetCurves, offset )
-        sketch.geometricConstraints.addOffset2( offsetInput )
+    outline: list[adsk.fusion.SketchCurve] = []
+    for curve in profile.outerLoop.profileCurves :
+        newEntity = Curve3DToSketch( sketch, curve.geometry )
+        outline.append( newEntity )
 
-def offsetProfiles_old( sketch: adsk.fusion.Sketch, faces: list[adsk.fusion.BRepFace], 
-                    templates: list[adsk.fusion.ProfileCurves], radius: float ) -> list[adsk.fusion.Profile] :
-
-    newLoops = []
-    i = 0 
-    startTime = time.time()
-    while i < len(templates) :
-        curves = templates[i]
-        loop = []
-        firstStartPt = None
-        # futil.log(f'Before Reverses {i} :: ts = {time.time()}, delta = {time.time()-startTime}')
-        # reverses = findReverses( faces[i], curves )
-        j = 0
-        # futil.log(f'Working of profile {i}, {len(curves)} curves :: ts = {time.time()}, delta = {time.time()-startTime}')
-        startTime = time.time()
-        while j < len(curves) :
-            # futil.log(f'         Projecting curve {j} :: ts = {time.time()}, delta = {time.time()-startTime}')
-            curve = curves[j]
-            # projectObjs = sketch.project( curve.sketchEntity )
-            # projCurve = projectObjs[0]
-            # projCurve.isConstruction = True
-            # futil.log(f'         Projected sketchEntity {j} :: ts = {time.time()}, delta = {time.time()-startTime}')
-            # futil.log(f'Offsetting curve :: ts = {time.time()}')
-            # futil.print_Curve3D(curve.geometry)
-            if curve.geometry.objectType == adsk.core.Line3D.classType() :
-                line: adsk.core.Line3D = curve.geometry
-                sketchCurve = sketch.sketchCurves.sketchLines.addByTwoPoints( line.startPoint, line.endPoint )
-                # sketch.geometricConstraints.addCollinear( sketchCurve, projCurve )
-            elif curve.geometry.objectType == adsk.core.Arc3D.classType() :
-                arc: adsk.core.Arc3D = curve.geometry
-                sketchCurve = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( arc.center, arc.startPoint, arc.endPoint )
-                # sketch.geometricConstraints.addCoincident( sketchCurve.startSketchPoint, projCurve )
-                # sketch.geometricConstraints.addCoincident( sketchCurve.endSketchPoint, projCurve )
-                # sketch.geometricConstraints.addConcentric( sketchCurve, projCurve )
-            else :
-                futil.log(f'   ============ offsetProfiles() Unhandled curve type: {curve.geometry.objectType}')
-            # startPtStr = futil.format_Point3D(sketchCurve.startSketchPoint.geometry)
-            # endPtStr = futil.format_Point3D(sketchCurve.endSketchPoint.geometry)
-            # futil.log(f'Working on curve from {startPtStr} to {endPtStr}')
-            sketchCurve.isFixed = True
-            sketchCurve.isConstruction = True
-
-            # futil.log(f'         Added Contraints {j} :: ts = {time.time()}, delta = {time.time()-startTime}')
-            # if not firstStartPt :
-            #     if reverses[j] :
-            #         firstStartPt = sketchCurve.endSketchPoint
-            #         prevEndPt = sketchCurve.startSketchPoint
-            #     else:
-            #         firstStartPt = sketchCurve.startSketchPoint
-            #         prevEndPt = sketchCurve.endSketchPoint
-            # else:
-            #     if reverses[j] :
-            #         startPt = sketchCurve.endSketchPoint
-            #         endPt = sketchCurve.startSketchPoint
-            #     else:
-            #         startPt = sketchCurve.startSketchPoint
-            #         endPt = sketchCurve.endSketchPoint
-
-            #     # futil.log(f'Making coincident {futil.format_Point3D(startPt.geometry)}, {futil.format_Point3D(prevEndPt.geometry)}')
-            #     # sketch.geometricConstraints.addCoincident( startPt, prevEndPt )
-            #     prevEndPt = endPt
-
-            loop.append( sketchCurve )
-            j += 1
-
-        # futil.log(f'Done projecting curves :: ts = {time.time()}, delta = {time.time()-startTime}')
-        # sketch.geometricConstraints.addCoincident( firstStartPt, prevEndPt )
-        offset = adsk.core.ValueInput.createByReal( 0.125 * 2.54 )
-        offsetInput = sketch.geometricConstraints.createOffsetInput( loop, offset )
-        offsetInput.isTopologyMatched = False
-        # futil.log(f'Before Offset {i} :: ts = {time.time()}, delta = {time.time()-startTime}')
-        offsetConstr = sketch.geometricConstraints.addOffset2( offsetInput )
-        # futil.log(f'After Offset {i} :: ts = {time.time()}, delta = {time.time()-startTime}')
-        offsetLoop = sketch.findConnectedCurves( offsetConstr.childCurves[0] )
-        futil.log(f'Found {len(offsetLoop)} Offset curves')
-        newLoops.append( offsetLoop )
-        i += 1
-
-    loopRadii = []
-    for loop in newLoops:
-        loopRadii.append( findCurvesMaximumRadius( loop ) )
-    for loop in newLoops:
-        filletConnectedCurve( loop, loopRadii, radius )
-    
-    futil.log(f'Done :: filleting time = {(time.time()-startTime):.5}s')
-
-    return
-
-def offsetProfile( sketch: adsk.fusion.Sketch, profile: LightenProfile ) -> adsk.fusion.Profile :
-
-    curves = profile.outerLoop.profileCurves
-    loop = []
-    # futil.log(f'Working of profile {i}, {len(curves)} curves :: ts = {time.time()}, delta = {time.time()-startTime}')
-    startTime = time.time()
-    for curve in curves :
-        # futil.log(f'         Projected sketchEntity {j} :: ts = {time.time()}, delta = {time.time()-startTime}')
-        # futil.log(f'Offsetting curve :: ts = {time.time()}')
-        # futil.print_Curve3D(curve.geometry)
-        if curve.geometry.objectType == adsk.core.Line3D.classType() :
-            line: adsk.core.Line3D = curve.geometry
-            sketchCurve = sketch.sketchCurves.sketchLines.addByTwoPoints( line.startPoint, line.endPoint )
-            # sketch.geometricConstraints.addCollinear( sketchCurve, projCurve )
-        elif curve.geometry.objectType == adsk.core.Arc3D.classType() :
-            arc: adsk.core.Arc3D = curve.geometry
-            sketchCurve = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( arc.center, arc.startPoint, arc.endPoint )
-            # sketch.geometricConstraints.addCoincident( sketchCurve.startSketchPoint, projCurve )
-            # sketch.geometricConstraints.addCoincident( sketchCurve.endSketchPoint, projCurve )
-            # sketch.geometricConstraints.addConcentric( sketchCurve, projCurve )
-        else :
-            futil.log(f'   ============ offsetProfiles() Unhandled curve type: {curve.geometry.objectType}')
-        # startPtStr = futil.format_Point3D(sketchCurve.startSketchPoint.geometry)
-        # endPtStr = futil.format_Point3D(sketchCurve.endSketchPoint.geometry)
-        # futil.log(f'Working on curve from {startPtStr} to {endPtStr}')
-        sketchCurve.isFixed = True
-        sketchCurve.isConstruction = True
-
-        loop.append( sketchCurve )
-
-    # futil.log(f'Done projecting curves :: ts = {time.time()}, delta = {time.time()-startTime}')
-    # sketch.geometricConstraints.addCoincident( firstStartPt, prevEndPt )
-    offset = adsk.core.ValueInput.createByReal( 0.125 * 2.54 )
-    offsetInput = sketch.geometricConstraints.createOffsetInput( loop, offset )
+    offset = adsk.core.ValueInput.createByReal( -profile.offsetDist )
+    offsetInput = sketch.geometricConstraints.createOffsetInput( outline, offset )
     offsetInput.isTopologyMatched = False
-    # futil.log(f'Before Offset {i} :: ts = {time.time()}, delta = {time.time()-startTime}')
-    offsetConstr = sketch.geometricConstraints.addOffset2( offsetInput )
-    # futil.log(f'After Offset {i} :: ts = {time.time()}, delta = {time.time()-startTime}')
+    try :
+        offsetConstr = sketch.geometricConstraints.addOffset2( offsetInput )
+    except :
+        None
+
+    failedOffset = False
+    offsetProfile = sketch.profiles.item(0)
+    offsetProfArea = offsetProfile.areaProperties().area
+    if( offsetProfArea > profile.area ) :
+        deleteList = []
+        for c in offsetProfile.profileLoops.item(0).profileCurves:
+            deleteList.append( c.sketchEntity )
+        for c in deleteList :
+            c.deleteMe()
+        offset = adsk.core.ValueInput.createByReal( profile.offsetDist )
+        offsetInput = sketch.geometricConstraints.createOffsetInput( outline, offset )
+        offsetInput.isTopologyMatched = False
+        try:
+            offsetConstr = sketch.geometricConstraints.addOffset2( offsetInput )
+        except:
+            failedOffset = True
+
+
+    if failedOffset :
+        sketch.deleteMe()
+        return
+
     offsetLoop = sketch.findConnectedCurves( offsetConstr.childCurves[0] )
     futil.log(f'Found {len(offsetLoop)} Offset curves')
 
     loopRadii = findCurvesMaximumRadii( profile, offsetLoop )
-    filletConnectedCurve( offsetLoop, loopRadii, profile.filletRadius )
+
+    # sketch2: adsk.fusion.Sketch = workingComp.sketches.add( profile.profile )
+    # sketch2.isComputeDeferred = True
+    # sketch2.name = 'CopyOffsetLoop'
+
+    # for c in offsetLoop:
+    #     sketch2.include( c )
+
+    singlefillet = filletConnectedCurve( offsetLoop, loopRadii, profile.filletRadius )
     
-    futil.log(f'Done :: filleting time = {(time.time()-startTime):.5}s')
+    try:
+        filletLoop = sketch.findConnectedCurves( singlefillet )
+    except:
+        filletLoop = None
+
+    if filletLoop :
+        profile.filletedLoop = SketchCurveToCurve3D( filletLoop )
+        profile.isComputed = True
+
+    # Delete the temporary sketch
+    sketch.deleteMe()
 
     return
 
-def extrudeProfile( solid: adsk.fusion.BRepBody, tools: adsk.fusion.Profile ) :
+def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, depth: float ) :
+
+    extrudeProfiles = adsk.core.ObjectCollection.create()
+    for p in sketch.profiles :
+        extrudeProfiles.add( p )
+    extrudes = sketch.parentComponent.features.extrudeFeatures
+    cutDistance = adsk.core.ValueInput.createByReal( depth )
+    extrudeCut = extrudes.createInput( extrudeProfiles, adsk.fusion.FeatureOperations.CutFeatureOperation)
+    distance = adsk.fusion.DistanceExtentDefinition.create( cutDistance )
+    extrudeCut.setOneSideExtent( distance, adsk.fusion.ExtentDirections.NegativeExtentDirection )
+    extrudeCut.participantBodies = [ solid ]
+    extrudes.add( extrudeCut )
 
     return
 
-def findReverses( face: adsk.fusion.BRepFace, curves: adsk.fusion.ProfileCurves ) -> list[bool] :
-    # Determine if the start point and end points need to be reversed for 
-    # each curve in the list of ProfileCurves
-    reverses: list[bool] = []
-    for curve in curves :
-        if curve.geometry.objectType == adsk.core.Line3D.classType() :
-            reverses.append( False )
-        elif curve.geometry.objectType == adsk.core.Arc3D.classType() :
-            arc: adsk.core.Arc3D = curve.geometry
-            if face.isPointOnFace( arc.center ) :
-                # futil.log(f'Arc center on face.  Not reversing')
-                reverses.append( False )
-            else:
-                # futil.log(f'Arc center not on face.  Reversing')
-                reverses.append( True )
-        else :
-            futil.log(f'   ============ findReverses() Unhandled curve type: {curve.geometry.objectType}')
-            reverses.append( False )
 
-    return reverses
-
-def constrainOffsetEntity( proj: adsk.fusion.SketchCurve, offset: adsk.fusion.SketchCurve, reverse: bool ) :
-    sketch = proj.parentSketch
-
-    if proj.objectType == adsk.fusion.SketchLine.classType() :
-        proj: adsk.fusion.SketchLine = proj
-
-        sketch.geometricConstraints.addParallel( proj, offset )
-
-        midpt = futil.make_Midpt( proj )
-        offsetDim = sketch.sketchDimensions.addOffsetDimension( proj, offset, midpt )
-        offsetDim.value = 0.125 * 2.54
-    elif proj.objectType == adsk.fusion.SketchArc.classType() :
-        proj: adsk.fusion.SketchArc = proj
-
-        sketch.geometricConstraints.addCoincident( proj.centerSketchPoint, offset.centerSketchPoint )
-        sketch.geometricConstraints.addCollinear( proj.centerSketchPoint, offset.centerSketchPoint )
-
-    else :
-        futil.log(f'   ============ constrainOffsetEntity() Unhandled curve type: {proj.objectType}')
-
-
-def filletConnectedCurve( rawloop: adsk.core.ObjectCollection, loopRadii: list[float], radius: float ) :
+def filletConnectedCurve( rawloop: adsk.core.ObjectCollection, 
+    loopRadii: list[float], radius: float ) -> adsk.fusion.SketchCurve :
 
     # Trim off all curve segments that are too short for the fillet radius
     loop = []
@@ -400,175 +380,68 @@ def filletConnectedCurve( rawloop: adsk.core.ObjectCollection, loopRadii: list[f
             loop.append( rawloop[i] )
         i += 1
 
+    if len(loop) < 2 :
+        return None 
+    
     i = 0
     while i < len(loop) - 1:
         filletBetweenTwoCurves( loop[i], loop[i+1], radius )
         i += 1
 
-    filletBetweenTwoCurves( loop[ len(loop)-1 ], loop[0], radius )
+    return filletBetweenTwoCurves( loop[ len(loop)-1 ], loop[0], radius )
 
 
-def filletBetweenTwoCurves( curve1: adsk.fusion.SketchCurve, curve2: adsk.fusion.SketchCurve, radius: float ) :
+def filletBetweenTwoCurves( 
+    curve1: adsk.fusion.SketchCurve, 
+    curve2: adsk.fusion.SketchCurve, radius: float ) -> adsk.fusion.SketchCurve :
+
     sketch = curve1.parentSketch
 
     futil.log(f'Filleting between :::')
     futil.print_SketchCurve( curve1 )
     futil.print_SketchCurve( curve2 )
-    if curve1.startSketchPoint == curve2.endSketchPoint :
-        startPt = curve1.startSketchPoint.geometry
-        endPt = curve2.endSketchPoint.geometry
-    elif curve1.endSketchPoint == curve2.endSketchPoint :
+    dist = curve1.startSketchPoint.geometry.distanceTo( curve2.endSketchPoint.geometry )
+    startPt = curve1.startSketchPoint.geometry
+    endPt = curve2.endSketchPoint.geometry
+    dist2 = curve1.endSketchPoint.geometry.distanceTo( curve2.endSketchPoint.geometry ) 
+    if dist2 < dist :
         startPt = curve1.endSketchPoint.geometry
         endPt = curve2.endSketchPoint.geometry
-    elif curve1.endSketchPoint == curve2.startSketchPoint :
+        dist = dist2
+    dist2 = curve1.endSketchPoint.geometry.distanceTo( curve2.startSketchPoint.geometry ) 
+    if dist2 < dist :
         startPt = curve1.endSketchPoint.geometry
         endPt = curve2.startSketchPoint.geometry
-    else :
+        dist = dist2
+    dist2 = curve1.startSketchPoint.geometry.distanceTo( curve2.startSketchPoint.geometry ) 
+    if dist2 < dist :
         startPt = curve1.startSketchPoint.geometry
         endPt = curve2.startSketchPoint.geometry
 
     futil.log(f'Filleting with input pts {futil.format_Point3D(startPt)} and {futil.format_Point3D(endPt)}')
+    fillet = None
     try :
-        sketch.sketchCurves.sketchArcs.addFillet( curve1, startPt, curve2, endPt, radius )
-        None
+        fillet = sketch.sketchCurves.sketchArcs.addFillet( curve1, startPt, curve2, endPt, radius )
     except Exception as e:
         futil.handle_error( e )
 
-def trimShortSegments( loop: adsk.core.ObjectCollection, radius: float ) -> list[adsk.fusion.SketchCurve] :
-    trimLoop = []
-
-    i = 0
-    while i < len(loop)-1 :
-        maxRadius = findMaxRadius( loop[i], loop[i+1] )
-        if maxRadius > radius:
-            trimLoop.append( loop[i] )
-        else:
-            loop[i].deleteMe()
-        i += 1
-
-    maxRadius = findMaxRadius( loop[ len(loop)-1 ], trimLoop[0] )
-    if maxRadius > radius:
-        trimLoop.append( loop[len(loop)-1] )
-    else:
-        loop[len(loop)-1].deleteMe()        
-
-    return trimLoop
-
-def findMaxRadius( c1: adsk.fusion.SketchCurve, c2: adsk.fusion.SketchCurve ) -> float :
-
-    futil.log(f' ==========   findMaxRadius()  ==========')
-    futil.log(f'=========== Starting with Curves ===========')
-    futil.print_Curve3D( c1.geometry )
-    futil.print_Curve3D( c2.geometry )
-
-    # Get correctly oreinted Curve3D objects
-    [orientedC1, orientedC2] = orientAndLinearizeCurves( c1, c2 )
-    futil.log(f'=========== Oriented Curves ===========')
-    futil.print_Curve3D( orientedC1 )
-    futil.print_Curve3D( orientedC2 )
-
-    # Find the largest fillet radius that can be used between c1 and c2
-    try:
-        eval1: adsk.core.CurveEvaluator3D = orientedC1.evaluator
-        eval2: adsk.core.CurveEvaluator3D = orientedC2.evaluator
-    except Exception as e:
-        futil.handle_error( e )
-        eval1 = None
-
-    if not eval1:
-        return 10000
-
-    [success, c1p0, c1p1] = eval1.getParameterExtents()
-    [success, c2p0, c2p1] = eval2.getParameterExtents()
-
-    # Get the midpoint
-    [success, midPt1] = eval1.getPointAtParameter( (c1p0 + c1p1) / 2)    
-    [success, midPt2] = eval2.getPointAtParameter( (c2p0 + c2p1) / 2)    
-    if not success :
-        return 10000
-
-    # Get the tangent at the midpoint
-    [success, tangent1] = eval1.getTangent( (c1p0 + c1p1) / 2)    
-    [success, tangent2] = eval2.getTangent( (c2p0 + c2p1) / 2)    
-    if not success :
-        return 10000
-
-    tangentLine1 = adsk.core.InfiniteLine3D.create( midPt1, tangent1 )
-    tangentLine2 = adsk.core.InfiniteLine3D.create( midPt2, tangent2 )
-    intersections = tangentLine1.intersectWithCurve( tangentLine2 )
-    if len(intersections) == 0:
-        futil.log(f'   *********  Cannot find intersection of tangent with c2  ********** ')
-        return 10000
-
-    intersecPt = intersections[0]
-    x_dist = midPt1.distanceTo( intersecPt )
-    two_beta = math.pi - tangent1.angleTo( tangent2 )
-
-    futil.log(f'    tangent1 ={futil.format_Vector3D(tangent1)}, tangent2 = {futil.format_Vector3D(tangent2)}')
-    futil.log(f'    midpt ={futil.format_Point3D(midPt1)}, intersectPt = {futil.format_Point3D(intersecPt)}')
-    futil.log(f'    x_dist ={x_dist}, two_beta = {two_beta}, Max fillet radius = {x_dist * math.tan( two_beta / 2 )}')
-
-    return x_dist * math.tan( two_beta / 2 )
-
-
-def orientAndLinearizeCurves( c1: adsk.fusion.SketchCurve, c2: adsk.fusion.SketchCurve ) -> tuple[adsk.core.Curve3D, adsk.core.Curve3D] :
-    c1StartPt: adsk.core.Point3D = c1.startSketchPoint.geometry
-    c1EndPt: adsk.core.Point3D = c1.endSketchPoint.geometry
-    c2StartPt: adsk.core.Point3D = c2.startSketchPoint.geometry
-    c2EndPt: adsk.core.Point3D = c2.endSketchPoint.geometry
-    if c1EndPt.isEqualTo( c2StartPt ):
-        return [ LinearizeCurve3D(c1.geometry), LinearizeCurve3D(c2.geometry) ]
-    elif c1EndPt.isEqualTo( c2EndPt ) :
-        return [ LinearizeCurve3D(c1.geometry), LinearizeCurve3D(c2.geometry, True) ]
-    elif c1StartPt.isEqualTo( c2StartPt ):
-        return [ LinearizeCurve3D(c1.geometry, True), LinearizeCurve3D(c2.geometry) ]
-    elif c1StartPt.isEqualTo( c2EndPt ):
-        return [ LinearizeCurve3D(c1.geometry, True), LinearizeCurve3D(c2.geometry, True) ]
-    else:
-        futil.log(f' *****************  CANNOT FIND COMMON End Point!!!! ************* ')
-
-def LinearizeCurve3D( curve: adsk.core.Curve3D, reverse: bool = False ) -> adsk.core.Curve3D :
-    if curve.objectType == adsk.core.Line3D.classType() :
-        curve: adsk.core.Line3D = curve
-        if reverse :
-            futil.log(f'Reversing Line3D....')
-            return adsk.core.Line3D.create( curve.endPoint, curve.startPoint )
-        else :
-            return curve
-    elif curve.objectType == adsk.core.Arc3D.classType() :
-        curve: adsk.core.Arc3D = curve
-        eval = curve.evaluator
-        [success, p0, p1] = eval.getParameterExtents()
-        [success, midPt] = eval.getPointAtParameter((p0 + p1) / 2)
-        [success, tangent] = eval.getTangent( (p0 + p1) / 2)
-        length = abs(curve.endAngle - curve.startAngle) * curve.radius
-        startOffset = tangent.copy()
-        startOffset.normalize()
-        startOffset.scaleBy( -length/1.5 )
-        startPt = midPt.copy()
-        startPt.translateBy( startOffset )
-        endOffset = tangent.copy()
-        endOffset.normalize()
-        endOffset.scaleBy( length/1.5 )
-        endPt = midPt.copy()
-        endPt.translateBy( endOffset )
-        futil.log(f' ============= Linearize ARC3D ==========')
-        futil.log(f'   center = {futil.format_Point3D(curve.center)}')
-        futil.log(f'   length = {length}, tangent={futil.format_Vector3D(tangent)}, midpt={futil.format_Point3D(midPt)}')
-        futil.log(f'   startOffset={futil.format_Vector3D(startOffset)}, endOffset={futil.format_Vector3D(endOffset)}')
-        futil.log(f'   startPt={futil.format_Point3D(startPt)}, endPt={futil.format_Point3D(endPt)}')
-        futil.log(f'   OrigStartPt={futil.format_Point3D(curve.startPoint)}, OrigEndPt={futil.format_Point3D(curve.endPoint)}')
-        if reverse:
-            futil.log(f'Reversing Arc3D....')
-            return adsk.core.Line3D.create( endPt, startPt )
-        else:
-            return adsk.core.Line3D.create( startPt, endPt )
-        
-
+    return fillet
 
 def findCurvesMaximumRadii( profile: LightenProfile, loop: adsk.core.ObjectCollection ) -> list[float] :
 
     sketch: adsk.fusion.Sketch = loop[0].parentSketch
+
+    curve: adsk.fusion.SketchCurve = loop[0]
+    bbox = curve.boundingBox
+    for c in loop:
+        bbox.combine( c.boundingBox )
+
+    shortestBBside = bbox.maxPoint.x - bbox.minPoint.x
+    if bbox.maxPoint.y - bbox.minPoint.y < shortestBBside :
+        shortestBBside = bbox.maxPoint.y - bbox.minPoint.y
+
+    startCircleRadius = min( shortestBBside/2, profile.filletRadius )
+    futil.log(f'  findCurvesMaximumRadii() --- starting Circle radius = {startCircleRadius} ')
 
     maxRadii = []
     i = 0
@@ -584,25 +457,117 @@ def findCurvesMaximumRadii( profile: LightenProfile, loop: adsk.core.ObjectColle
         curve: adsk.fusion.SketchCurve = loop[i]
         nextCurve: adsk.fusion.SketchCurve = loop[next]
 
-        # Construct a circle tangent to all three curves
-        circ = sketch.sketchCurves.sketchCircles.addByCenterRadius( profile.centroid, profile.filletRadius )
-        try:
-            sketch.geometricConstraints.addTangent( curve, circ )
-            sketch.geometricConstraints.addTangent( prevCurve, circ )
-            sketch.geometricConstraints.addTangent( nextCurve, circ )
-        except Exception as e:
-            futil.handle_error( e )
+        concaveArc = False
+        if curve.objectType == adsk.fusion.SketchArc.classType() :
+            if isConcaveInward( curve.geometry, profile.centroid ) :
+                futil.log(f'Curve is a Concave Inward Arc, R = {curve.radius}')
+                maxRadii.append( curve.radius )
+                concaveArc = True
 
-        if not circ.isFullyConstrained:
-            maxRadii.append( 1000000 )
-        else:
-            maxRadii.append( circ.radius )
+        if not concaveArc :
+            # Construct a circle tangent to all three curves
+            circ = sketch.sketchCurves.sketchCircles.addByCenterRadius( profile.centroid, startCircleRadius )
+            reorderTangents = False
+            try:
+                sketch.geometricConstraints.addTangent( curve, circ )
+                sketch.geometricConstraints.addTangent( prevCurve, circ )
+                sketch.geometricConstraints.addTangent( nextCurve, circ )
+            except:
+                reorderTangents = True
 
-        try:
-            circ.deleteMe()
-        except:
-            None
+            if reorderTangents:
+                try :
+                    circ.deleteMe()
+                    circ = sketch.sketchCurves.sketchCircles.addByCenterRadius( profile.centroid, startCircleRadius )
+                    sketch.geometricConstraints.addTangent( curve, circ )
+                    sketch.geometricConstraints.addTangent( nextCurve, circ )
+                    sketch.geometricConstraints.addTangent( prevCurve, circ )
+                except Exception as e:
+                    futil.handle_error( e )
+            
+            if not circ.isFullyConstrained:
+                maxRadii.append( 1000000 )
+            else:
+                maxRadii.append( circ.radius )
+
+        futil.log(f'Max Fillet Radius = {maxRadii[len(maxRadii)-1]}')
+
+        # try:
+        #     circ.deleteMe()
+        # except:
+        #     None
 
         i += 1
 
     return maxRadii
+
+def SketchCurveToCurve3D( coll: adsk.core.ObjectCollection ) -> list[adsk.core.Curve3D] :
+
+    curves = []
+    for obj in coll :
+        curves.append( obj.geometry )
+
+    return curves
+
+def Curves3DToSketch( sketch: adsk.fusion.Sketch, curves: list[adsk.core.Curve3D] ) :
+
+    for curve in curves:
+        if curve.objectType == adsk.core.Line3D.classType() :
+            line: adsk.core.Line3D = curve
+            sketchCurve = sketch.sketchCurves.sketchLines.addByTwoPoints( line.startPoint, line.endPoint )
+        elif curve.objectType == adsk.core.Arc3D.classType() :
+            arc: adsk.core.Arc3D = curve
+            sketchCurve = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( arc.center, arc.startPoint, arc.endPoint )
+        sketchCurve.isFixed = True
+
+def Curve3DToSketch( sketch: adsk.fusion.Sketch, curve: adsk.core.Curve3D ) -> adsk.fusion.SketchCurve :
+
+    sketchCurve = adsk.fusion.SketchCurve.cast(None)
+    if curve.objectType == adsk.core.Line3D.classType() :
+        line: adsk.core.Line3D = curve
+        sketchCurve = sketch.sketchCurves.sketchLines.addByTwoPoints( line.startPoint, line.endPoint )
+    elif curve.objectType == adsk.core.Arc3D.classType() :
+        arc: adsk.core.Arc3D = curve
+        sketchCurve = sketch.sketchCurves.sketchArcs.addByCenterStartEnd( arc.center, arc.startPoint, arc.endPoint )
+    else :
+        futil.log(f' Curve3DToSketch() -- Unhandled object "{curve.objectType}"')
+
+    if sketchCurve:
+        sketchCurve.isFixed = True
+        sketchCurve.isConstruction = True
+
+    return sketchCurve
+
+def isConcaveInward( arc: adsk.core.Arc3D, centroid: adsk.core.Point3D ) -> bool :
+            # Create a unit vector from the center of the arc to the centroid of the profile
+    centroidVec = futil.twoPointUnitVector( arc.center, centroid )
+    angle = centroidVec.angleTo( futil.toVector2D(arc.referenceVector) )
+
+    futil.log(f'**************  Centroid to Reference Angle = {angle * 180 / math.pi}')
+
+    if angle > math.pi / 2 :
+        return True
+    
+    return False
+
+def isLoopFlowPositive( profile: LightenProfile ) -> bool :
+
+    curves = profile.outerLoop.profileCurves
+
+    for c in curves:
+        if c.geometry.objectType == adsk.core.Line3D.classType() :
+            line: adsk.core.Line3D = c.geometry
+            startPt2D = futil.toPoint2D( line.startPoint )
+            endPt2D = futil.toPoint2D( line.endPoint )
+            normal = futil.lineNormal(startPt2D, endPt2D)
+            centroidVec = futil.twoPointUnitVector( line.startPoint, profile.centroid )
+            angle = centroidVec.angleTo( normal )
+            futil.log(f'  isLoopFlowPositive() ------ {angle < math.pi / 2 }')
+            futil.print_Curve3D( line )
+            futil.log(f' centroid = {futil.format_Point3D( profile.centroid )}, normal = ({normal.x}, {normal.y})')
+            futil.log(f'     Inside left angle = {angle * 180 / math.pi}')
+    if angle < math.pi / 2:
+        return True
+    else :
+        return False
+

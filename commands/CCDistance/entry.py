@@ -157,6 +157,10 @@ def ui_marking_menu(args: adsk.core.MarkingMenuEventArgs):
 
     controls = args.linearMarkingMenu.controls
 
+    # futil.log(f' Active Workspace = {app.activeProduct}')
+    if app.activeProduct.objectType != adsk.fusion.Design.classType() :
+        return
+
     # Gather the Mtext command
     editMTextCmd = controls.itemById( 'EditMTextCmd' )
 
@@ -209,6 +213,12 @@ def edit_command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # futil.log(f'{args.command.parentCommandDefinition.name} edit_command_created()')
 
+    futil.add_handler(args.command.destroy, command_destroy, local_handlers=local_handlers)
+
+    if target_CCLine.line.isFullyConstrained :
+        futil.popup_error( 'CC Line is Fully Constrained and cannot be edited.  Remove some constraints to edit.')
+        return
+
     # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
 
@@ -224,7 +234,7 @@ def edit_command_created(args: adsk.core.CommandCreatedEventArgs):
 
     inputs.addBoolValueInput( "swap_cogs", "Swap Cogs", True )
 
-    beltTeeth = inputs.addIntegerSpinnerCommandInput( "belt_teeth", "Belt Teeth", 40, 400, 1, 70 )
+    beltTeeth = inputs.addIntegerSpinnerCommandInput( "belt_teeth", "Belt Teeth", 35, 400, 1, 70 )
     beltTeeth.isVisible = False
 
     # Create a value input field and set the default using 1 unit of the default length unit.
@@ -297,7 +307,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     inputs.addBoolValueInput( "swap_cogs", "Swap Cogs", True )
 
-    beltTeeth = inputs.addIntegerSpinnerCommandInput( "belt_teeth", "Belt Teeth", 40, 400, 1, 70 )
+    beltTeeth = inputs.addIntegerSpinnerCommandInput( "belt_teeth", "Belt Teeth", 35, 400, 1, 70 )
     beltTeeth.isVisible = False
 
     # Create a value input field and set the default using 1 unit of the default length unit.
@@ -691,10 +701,14 @@ def modifyCCLine( ccLine: CCLine ):
 
     ld = ccLine.data
 
+    try:
+        ccLine.lengthDim.value = (ld.ccDistIN + ld.ExtraCenterIN) * 2.54
+    except:
+        futil.popup_error( 'Failed to resize centerline!  Are both ends of C-C Distance constrained?', True )
+        return
+
     label = createLabelString( ld )
     ccLine.textBox.text = label
-
-    ccLine.lengthDim.value = (ld.ccDistIN + ld.ExtraCenterIN) * 2.54
 
     ccLine.PD1Dim.value = ld.PD1 * 2.54
     ccLine.PD2Dim.value = ld.PD2 * 2.54

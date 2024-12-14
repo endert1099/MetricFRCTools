@@ -34,6 +34,9 @@ def offsetPoint2D( pt1: adsk.core.Point2D, x: float, y: float ) -> adsk.core.Poi
 def toLine2D( l3d: adsk.core.Line3D ) -> adsk.core.Line2D :
     return adsk.core.Line2D.create( toPoint2D(l3d.startPoint), toPoint2D(l3d.endPoint) )
 
+def toVector2D( v: adsk.core.Vector3D ) -> adsk.core.Vector2D :
+    return adsk.core.Vector2D.create( v.x, v.y )
+
 def multVector2D( v: adsk.core.Vector2D, val: float ) -> adsk.core.Vector2D :
     return adsk.core.Vector2D.create( v.x * val, v.y * val )
 
