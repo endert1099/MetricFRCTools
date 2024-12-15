@@ -22,6 +22,7 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # Local list of event handlers used to maintain a reference so
 # they are not released and garbage collected.
 local_handlers = []
+ControlKeyHeldDown = False
 
 
 # Class to hold lighten profile info
@@ -109,12 +110,14 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     inputs = args.command.commandInputs
 
     # Create a solid selection input.
-    solidSelection = inputs.addSelectionInput('solid_selection', 'Solid', 'Select the solid body to pocket')
+    solidSelection = inputs.addSelectionInput('solid_selection', 'Solid', 
+                                              'Select the solid body to pocket.')
     solidSelection.addSelectionFilter( "SolidBodies" )
     solidSelection.setSelectionLimits( 1, 1 )
 
     # Create a profile selection input.
-    profileSelection = inputs.addSelectionInput('profile_selection', 'Profiles', 'Select the profiles to use for pocketing')
+    profileSelection = inputs.addSelectionInput('profile_selection', 'Profiles', 
+                    'Select the profiles to use for pocketing. Hold Ctrl-Key to delay update.')
     profileSelection.addSelectionFilter( "Profiles" )
     profileSelection.setSelectionLimits( 1, 0 )
 
@@ -153,8 +156,6 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     global lightenProfileList
 
-    startTime = time.time()
-
     inputs = args.command.commandInputs
     solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
     profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
@@ -162,8 +163,19 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     solid: adsk.fusion.BRepBody = solidSelection.selection(0).entity
 
+    ComputesNeeded = 0
     for profile in lightenProfileList:
         if not profile.isComputed :
+            ComputesNeeded += 1
+    
+    ui.progressBar.show( '%p Done. Processing Profile %v of %m', 0, ComputesNeeded + 1 )
+
+    i = 0
+    for profile in lightenProfileList:
+        if not profile.isComputed :
+            i += 1
+            ui.progressBar.progressValue = i
+            adsk.doEvents()
             offsetProfile( profile )
 
     workingComp = solid.parentComponent
@@ -175,19 +187,23 @@ def command_execute(args: adsk.core.CommandEventArgs):
         if profile.isComputed:
             Curves3DToSketch( sketch, profile.filletedLoop )
     
+    ui.progressBar.progressValue = i + 1
+    adsk.doEvents()
+
     sketch.isComputeDeferred = False
     if sketch.profiles.count > 0 :
         extrudeProfiles( solid, sketch, pocketDepth.value )
 
-    futil.log(f'Execute Done :: Total time = {(time.time()-startTime):.5}s')
+    ui.progressBar.hide()
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
     futil.log(f'{CMD_NAME} Command Preview Event')
 
-    command_execute( args )
-    args.isValidResult = True
+    if not ControlKeyHeldDown :
+        command_execute( args )
+        args.isValidResult = True
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.
@@ -267,11 +283,24 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
     inputs = args.inputs
 
 def command_keydown(args: adsk.core.KeyboardEventArgs):
-    
+    global ControlKeyHeldDown
+
     futil.log(f'{CMD_NAME} KeyDown Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+ 
+    if args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier :
+        ControlKeyHeldDown = True
 
 def command_keyup(args: adsk.core.KeyboardEventArgs):
+    global ControlKeyHeldDown
+
     futil.log(f'{CMD_NAME} KeyUp Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+
+    if not args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier :
+        if ControlKeyHeldDown :
+            # Ctrl key was held down.  Now it has been released
+            ControlKeyHeldDown = False
+            cmd: adsk.core.Command = args.firingEvent.sender
+            cmd.doExecutePreview()
 
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):

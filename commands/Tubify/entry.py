@@ -1,6 +1,7 @@
 import adsk.core
 import adsk.fusion
 import os
+import math
 from ...lib import fusionAddInUtils as futil
 from ... import config
 app = adsk.core.Application.get()
@@ -22,6 +23,16 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # they are not released and garbage collected.
 local_handlers = []
 
+holeConfigs = (
+    (0, 0, 'No Holes'),
+    (4, 0.5, 'All 4 Sides 1/2" Spacing (WCP)'),
+    (4, 1, 'All 4 Sides 1" Spacing (VEX)'),     # Only for 1x1 tubing...
+    (2, 0.5, '2 Sides 1/2" Spacing (WCP)'),
+    (2, 1, '2 Sides 1" Spacing (VEX)'),
+)
+
+holeCfgDefault = 0      #   No Holes
+
 wallThicknesses = ( 
     (0.050, '0.050"'),
     (0.0625, '1/16"'),
@@ -31,6 +42,23 @@ wallThicknesses = (
 )
 wallThicknessesDefault = wallThicknesses.index( (0.125, '1/8"') )
 
+class TubifyParams :
+    solid: adsk.fusion.BRepBody = None
+    wall_thickness: float = 0.125
+    sides_with_holes: int = 0
+    hole_spacing: float = 0.5
+    end_offset: float = 0.5
+    showPartialHoles: bool = True
+
+    def __init__( self, solid: adsk.fusion.BRepBody, wThickIdx: int, holeSidesIdx, endOffset, showPartialHoles ) :
+        self.solid = solid
+        thicknessCfg = wallThicknesses[ wThickIdx ]
+        self.wall_thickness = thicknessCfg[0]
+        holeCfg = holeConfigs[ holeSidesIdx ]
+        self.sides_with_holes = holeCfg[0]
+        self.hole_spacing = holeCfg[1]
+        self. end_offset = endOffset
+        self.showPartialHoles = showPartialHoles
 
 # Executed when add-in is run.
 def start():
@@ -80,7 +108,7 @@ def stop():
 # This defines the contents of the command dialog and connects to the command related events.
 def command_created(args: adsk.core.CommandCreatedEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Created Event')
+    # futil.log(f'{CMD_NAME} Command Created Event')
 
     # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
@@ -88,15 +116,15 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # TODO Define the dialog for your command by adding different inputs to the command.
 
     # Create a Solid Body selection input.
-    solidSelection = inputs.addSelectionInput('tube_solid', 'Solid', 'Select the solid to Tubify')
+    solidSelection = inputs.addSelectionInput('tube_solid', 'Tubes', 'Select the solid to Tubify')
     solidSelection.addSelectionFilter( "SolidBodies" )
-    solidSelection.setSelectionLimits( 1, 1 )
+    solidSelection.setSelectionLimits( 1, 0 )
 
     # Create a simple text box input.
-    holeSides = inputs.addDropDownCommandInput('hole_sides', 'Hole Sides', adsk.core.DropDownStyles.TextListDropDownStyle)
-    holeSides.listItems.add('No Holes', False, '')
-    holeSides.listItems.add('2 Sides', False, '')
-    holeSides.listItems.add('4 Sides', True, '')
+    holeSidesInp = inputs.addDropDownCommandInput('hole_sides', 'Hole Sides', adsk.core.DropDownStyles.TextListDropDownStyle)
+    for holeCfg in holeConfigs:
+        holeSidesInp.listItems.add( holeCfg[2], False, '')
+    holeSidesInp.listItems.item( holeCfgDefault ).isSelected = True
 
     # Create a simple text box input.
     wallThickInput = inputs.addDropDownCommandInput('wall_thickness', 'Wall Thickness', adsk.core.DropDownStyles.TextListDropDownStyle)
@@ -106,11 +134,13 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # Create a value input field and set the default using 1 unit of the default length unit.
     defaultLengthUnits = "in"
-    default_value = adsk.core.ValueInput.createByString('0.5')
-    inputs.addValueInput('end_offset', 'End Offset', defaultLengthUnits, default_value)
+    default_value = adsk.core.ValueInput.createByString('0.0')
+    endOffset = inputs.addValueInput('end_offset', 'End Offset', defaultLengthUnits, default_value)
+    endOffset.isVisible = False
 
     # Create a checkbox for partial holes.
-    inputs.addBoolValueInput( "create_partial_holes", "Show Partial Holes", True, "", True )
+    showPartialHoles = inputs.addBoolValueInput( "create_partial_holes", "Show Partial Holes", True )
+    showPartialHoles.isVisible = False
 
     # TODO Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
@@ -124,7 +154,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    # futil.log(f'{CMD_NAME} Command Execute Event')
 
     # Get a reference to your command's inputs.
     inputs = args.command.commandInputs
@@ -134,14 +164,30 @@ def command_execute(args: adsk.core.CommandEventArgs):
     wallThickness: adsk.core.DropDownCommandInput = inputs.itemById('wall_thickness')
     showPartialHoles = inputs.itemById('create_partial_holes').value
 
-    futil.print_Selection( solidSelection )
-    solid: adsk.fusion.BRepBody = solidSelection.selection(0).entity
-    if solid.vertices.count != 8 :
-        futil.popup_error(f'Invalid number of vertices in body!  Should be 8 got {solid.vertices.count}')
-        return
-    
-    orientedBB = solid.orientedMinimumBoundingBox
-    futil.print_OrientedBB( orientedBB )
+    wThickIdx = wallThickness.selectedItem.index
+    holeSidesIdx = holeSides.selectedItem.index
+    endOffsetIn = endOffset.value
+
+    # ui.progressBar.show( 'Tubifying ... %v of %m', 0, solidSelection.selectionCount - 1 )
+
+    i = 0
+    while i < solidSelection.selectionCount :
+        # ui.progressBar.progressValue = i
+        # adsk.doEvents()
+        solid: adsk.fusion.BRepBody = solidSelection.selection(i).entity
+        if solid.vertices.count != 8 :
+            futil.popup_error(f'Invalid number of vertices in body!  Should be 8 got {solid.vertices.count}')
+        else :
+            tubifyInfo = TubifyParams( solid, wThickIdx, holeSidesIdx, endOffsetIn, showPartialHoles )
+            tubifySolid( tubifyInfo )
+        i += 1
+    # ui.progressBar.hide()
+
+# Tubify and single BRep solid
+def tubifySolid( tubifyInfo: TubifyParams ) :
+
+    orientedBB = tubifyInfo.solid.orientedMinimumBoundingBox
+    # futil.print_OrientedBB( orientedBB )
     longLength = orientedBB.height
     if orientedBB.width > longLength:
         longLength = orientedBB.width
@@ -153,8 +199,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
     endArea = 999999
     sideMaxArea = 0
     i = 0
-    while i < solid.faces.count :
-        face = solid.faces.item(i)
+    while i < tubifyInfo.solid.faces.count :
+        face = tubifyInfo.solid.faces.item(i)
         if face.area < endArea :
             endArea = face.area
         if face.area > sideMaxArea :
@@ -163,16 +209,16 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     endFaces = adsk.core.ObjectCollection.create()
     i = 0
-    while i < solid.faces.count :
-        face = solid.faces.item(i)
+    while i < tubifyInfo.solid.faces.count :
+        face = tubifyInfo.solid.faces.item(i)
         if abs(face.area - endArea) < 0.001:
             endFaces.add( face )
         i += 1
 
-    hasWiderSides = False
+    isRectangle = False
     if abs(endArea - 12.9032) < 0.001 :
         futil.log( f'Found {len(endFaces)} end Faces of the Solid 2 x 1 Body.')
-        hasWiderSides = True
+        isRectangle = True
     elif abs(endArea - 6.4516) < 0.001 :
         futil.log( f'Found {len(endFaces)} end Faces of the Solid 1 x 1 Body.')
     else :
@@ -185,50 +231,49 @@ def command_execute(args: adsk.core.CommandEventArgs):
     wideSideFaces = adsk.core.ObjectCollection.create()
     otherWideSideFaces = adsk.core.ObjectCollection.create()
     i = 0
-    while i < solid.faces.count :
-        face = solid.faces.item(i)
+    while i < tubifyInfo.solid.faces.count :
+        face = tubifyInfo.solid.faces.item(i)
         if abs(face.area - sideMaxArea) < 0.001:
             wideSideFaces.add( face )
-        elif hasWiderSides and face.area - endArea > 0.001 :
+        elif isRectangle and face.area - endArea > 0.001 :
             narrowSideFaces.add( face )
         i += 1
 
-    if not hasWiderSides:
+    if not isRectangle:
         otherWideSideFaces.add( wideSideFaces.item(1) )
         otherWideSideFaces.add( wideSideFaces.item(3) )
         wideSideFaces.removeByIndex( 1 )
         wideSideFaces.removeByIndex( 2 ) # 3 becomes 2
 
-    futil.log( f'Found {len(wideSideFaces)} wide side Faces, {len(otherWideSideFaces)} other wide faces, and {len(narrowSideFaces)} narrow side Faces.')
+    # futil.log( f'Found {len(wideSideFaces)} wide side Faces, {len(otherWideSideFaces)} other wide faces, and {len(narrowSideFaces)} narrow side Faces.')
 
 
     # Obtain the component of the solid body
-    workingComp = solid.parentComponent
+    workingComp = tubifyInfo.solid.parentComponent
 
     # Shell out the tube 
     shells = workingComp.features.shellFeatures
-    wallThickness.selectedItem.index
-    shellThickness = adsk.core.ValueInput.createByReal( wallThicknesses[wallThickness.selectedItem.index][0] * 2.54 )
+    shellThickness = adsk.core.ValueInput.createByReal( tubifyInfo.wall_thickness * 2.54 )
     shellSolidInput = shells.createInput( endFaces )
     shellSolidInput.insideThickness = shellThickness
     shells.add( shellSolidInput )
 
     # If no holes just return
-    if holeSides.selectedItem.index == 0 :
+    if tubifyInfo.sides_with_holes == 0 :
         return
 
     # 2 Side Holes
-    if hasWiderSides :
-        createHoleProfiles( workingComp, narrowSideFaces, longLength, 1.0, 2.0, endOffset.value / 2.54, showPartialHoles )
+    if isRectangle :
+        createHoleProfiles( workingComp, tubifyInfo, narrowSideFaces, longLength )
     else:
-        createHoleProfiles( workingComp, wideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+        createHoleProfiles( workingComp, tubifyInfo, wideSideFaces, longLength )
 
     # 4 Side Holes
-    if holeSides.selectedItem.index == 2 : 
-        if hasWiderSides :
-            createHoleProfiles( workingComp, wideSideFaces, longLength, 2.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+    if tubifyInfo.sides_with_holes == 4 : 
+        if isRectangle :
+            createHoleProfiles( workingComp, tubifyInfo, wideSideFaces, longLength )
         else :
-            createHoleProfiles( workingComp, otherWideSideFaces, longLength, 1.0, 1.0, endOffset.value / 2.54, showPartialHoles )
+            createHoleProfiles( workingComp, tubifyInfo, otherWideSideFaces, longLength )
 
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
@@ -238,6 +283,7 @@ def command_preview(args: adsk.core.CommandEventArgs):
     inputs = args.command.commandInputs
 
     command_execute( args )
+    args.isValidResult = True
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.
@@ -248,6 +294,20 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     # # General logging for debug.
     # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
+    endOffset: adsk.core.ValueCommandInput = inputs.itemById('end_offset')
+    holeSides: adsk.core.DropDownCommandInput = inputs.itemById('hole_sides')
+    showPartialHoles = inputs.itemById('create_partial_holes')
+
+    if changed_input.id == 'hole_sides' :
+        holeCfg = holeConfigs[ holeSides.selectedItem.index ]
+        if holeCfg[0] == 0 :
+            # No holes
+            endOffset.isVisible = False
+            showPartialHoles.isVisible = False
+        else :
+            endOffset.isVisible = True
+            showPartialHoles.isVisible = True
+                
 
 # This event handler is called when the user interacts with any of the inputs in the dialog
 # which allows you to verify that all of the inputs are valid and enables the OK button.
@@ -255,12 +315,16 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
     inputs = args.inputs
 
-    solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('tube_solid')
     endOffset: adsk.core.ValueCommandInput = inputs.itemById('end_offset')
-    
+    holeSides: adsk.core.DropDownCommandInput = inputs.itemById('hole_sides')
+
     # Verify the validity of the input values. This controls if the OK button is enabled or not.
 
-    if endOffset.value >= 0 and endOffset.value < 2.54 :  # in centimeters always
+    holeCfg = holeConfigs[ holeSides.selectedItem.index ]
+
+    if holeCfg[0] == 0 :
+        args.areInputsValid = True
+    elif endOffset.value >= 0 and endOffset.value <= holeCfg[1] * 2.54 :  # in centimeters?
         args.areInputsValid = True
     else:
         args.areInputsValid = False
@@ -276,12 +340,12 @@ def command_destroy(args: adsk.core.CommandEventArgs):
 
 
 def createHoleProfiles( 
-        workingComp: adsk.fusion.Component, 
-        sideFaces: adsk.core.ObjectCollection,
-        length: float, width: float, cutDepth: float, offset: float, showPartialHoles: bool ) :
+        workingComp: adsk.fusion.Component, tubifyInfo: TubifyParams,
+        sideFaces: adsk.core.ObjectCollection, cutDepth: float ) :
 
     # Create a new sketch for the wide side holes
     sketch = workingComp.sketches.add( sideFaces.item(0) )
+    sketch.name = 'Tubify'
     sketchEdges = adsk.core.ObjectCollection.create()
     for edge in sideFaces.item(0).edges :
         sketchEdges.add( sketch.project( edge ).item(0) )
@@ -291,8 +355,11 @@ def createHoleProfiles(
     longEdge: adsk.fusion.SketchLine = sketchEdges.item(0)
     shortEdge: adsk.fusion.SketchLine = sketchEdges.item(1)
     if shortEdge.length > longEdge.length :
-        longEdge: adsk.fusion.SketchLine = sketchEdges.item(1)
-        shortEdge: adsk.fusion.SketchLine = sketchEdges.item(0)
+        longEdge = sketchEdges.item(1)
+        shortEdge = sketchEdges.item(0)
+
+    lengthIn = longEdge.length / 2.54
+    widthIn = shortEdge.length / 2.54
         
     cornerPoint = longEdge.endSketchPoint
     if longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.startSketchPoint.geometry ) :
@@ -316,56 +383,81 @@ def createHoleProfiles(
         return
 
     # Create the corner hole to use as the rectangular pattern
+    holeDiameter = 0.196 * 2.54
     centroid = futil.BBCentroid( sketch.boundingBox )
-    cornerHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( centroid, 0.196 * 2.54 / 2 )
+    cornerHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( centroid, holeDiameter / 2 )
     textPoint = futil.offsetPoint3D( cornerHole.centerSketchPoint.geometry, 0.1, 0.1, 0 )
     diamDim = sketch.sketchDimensions.addDiameterDimension( cornerHole, textPoint )
-    diamDim.value = 0.196 * 2.54
+    diamDim.value = holeDiameter
+
+    # Create the width direction dimension
     textPoint = cornerPoint.geometry
     horizDim = sketch.sketchDimensions.addDistanceDimension( 
         cornerHole.centerSketchPoint, cornerPoint, 
         adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation, textPoint )
     horizDim.value = 0.5 * 2.54
-    textPoint = cornerPoint.geometry
-    vertDim = sketch.sketchDimensions.addDistanceDimension( 
-        cornerHole.centerSketchPoint, cornerPoint, 
-        adsk.fusion.DimensionOrientations.VerticalDimensionOrientation, textPoint )
-    if showPartialHoles :
-        if offset < 0.5:
-            vertDim.value = offset * 2.54
-        else :
-            vertDim.value = (offset - 0.5) * 2.54
-    else:
-        vertDim.value = offset * 2.54
+
+    # Determine what the length dimension should be for the first hole
+    dimValue = tubifyInfo.end_offset
+    if abs( dimValue - tubifyInfo.hole_spacing ) < 0.001 :
+        dimValue = 0 
+
+    # Either create the length direction dimension of make the center
+    # coincident with the end line if the offset is zero.
+    if abs( dimValue ) < 0.001 :
+        sketch.geometricConstraints.addCoincident( cornerHole.centerSketchPoint, shortEdge )
+    else :
+        textPoint = cornerPoint.geometry
+        vertDim = sketch.sketchDimensions.addDistanceDimension( 
+            cornerHole.centerSketchPoint, cornerPoint, 
+            adsk.fusion.DimensionOrientations.VerticalDimensionOrientation, textPoint )
+        vertDim.value = dimValue
 
     # Create the rectangular pattern
     rectPattern = sketch.geometricConstraints.createRectangularPatternInput( 
         [cornerHole], adsk.fusion.PatternDistanceType.SpacingPatternDistanceType )
     rectPattern.directionOneEntity = shortEdge
     rectPattern.directionTwoEntity = longEdge
+
+    # Determine the number repeats in the rectangular pattern
+    widthRepeats = int( (widthIn / 0.5) - 0.5 )
+        
+    lengthRepeats = int( (lengthIn / tubifyInfo.hole_spacing) + 0.5 )
+    if tubifyInfo.showPartialHoles :
+        lengthRepeats += 1
+
+    if widthRepeats == 0 :
+        futil.log(f'    Problem computing width repeats GOT ZERO !!!!')
+        widthRepeats = 1
+    if lengthRepeats == 0 :
+        futil.log(f'    Problem computing length repeats GOT ZERO !!!!')
+        lengthRepeats = 1
+    futil.log( f' Using a {widthRepeats} x {lengthRepeats} rectangular pattern on {widthIn}" x {lengthIn}" tube.')
+
+    # Setup the width hole spacing and number of holes...
     rectPattern.distanceOne = futil.Value( 0.5 )
-    rectPattern.distanceTwo = futil.Value( 0.5 )
-    rectPattern.quantityOne = futil.Value( int( (width / 0.5) - 0.5 ))
-    if showPartialHoles :
-        rectPattern.quantityTwo = futil.Value( int( (length / 0.5) + 1.5 ) )
-    else:
-        rectPattern.quantityTwo = futil.Value( int( (length / 0.5) - 0.5 ) )
+    rectPattern.quantityOne = futil.Value( widthRepeats )
+
+    # Setup the length hole spacing and number of holes
+    rectPattern.distanceTwo = futil.Value( tubifyInfo.hole_spacing )
+    rectPattern.quantityTwo = futil.Value( lengthRepeats )
     sketch.geometricConstraints.addRectangularPattern( rectPattern )
 
-    # Extrude the holes through the tube
-    circleProfileArea = sketch.profiles.item(0).areaProperties().area
-    if circleProfileArea > sketch.profiles.item(1).areaProperties().area :
-        circleProfileArea = sketch.profiles.item(1).areaProperties().area
+    holeArea = holeDiameter * holeDiameter * math.pi / 4.0
 
+    # for p in sketch.profiles:
+    #     futil.log(f'   Profile area = {p.areaProperties().area}, hole area = {holeArea}')
+
+    # Find the holes profiles
     holeProfiles = adsk.core.ObjectCollection.create()
     for profile in sketch.profiles:
-        if showPartialHoles:
-            if profile.areaProperties().area - circleProfileArea < 0.001: 
+        if tubifyInfo.showPartialHoles:
+            if holeArea - profile.areaProperties().area > -0.001 : 
                 holeProfiles.add( profile )
-        elif abs(profile.areaProperties().area - circleProfileArea) < 0.001:
+        elif abs( holeArea - profile.areaProperties().area ) < 0.001 :
             holeProfiles.add( profile )
     
-    # futil.log( f'Found {len(holeProfiles)} hole profiles to extrude.')
+    # Extrude the holes through the tube
     extrudes = workingComp.features.extrudeFeatures
     cutDistance = adsk.core.ValueInput.createByReal( cutDepth * 2.54 )
     extrudeCut = extrudes.createInput(holeProfiles, adsk.fusion.FeatureOperations.CutFeatureOperation)

@@ -13,7 +13,7 @@ ui = app.userInterface
 # TODO *** Specify the command identity information. ***
 CREATE_CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceDialog'
 CREATE_CMD_NAME = 'C-C Distance'
-CREATE_CMD_Description = 'Determine pitch diameters and C-C distances'
+CREATE_CMD_Description = 'Determine C-C distances for Gears and Belts'
 
 EDIT_CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_CCDistanceEdit'
 EDIT_CMD_NAME = 'Edit C-C Distance'

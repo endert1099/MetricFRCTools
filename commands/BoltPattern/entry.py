@@ -15,7 +15,7 @@ CMD_NAME = 'FRC Bolt Pattern'
 CMD_Description = 'Create a bolt pattern for common FRC motors'
 
 # Specify that the command will be promoted to the panel.
-IS_PROMOTED = True
+IS_PROMOTED = False
 
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
@@ -35,16 +35,16 @@ class BoltPattern(typing.NamedTuple) :
     patternDia: float = 0.0
     holeSize: float = 0.0
     numberOfHoles: int = 0
-    supression: list[int] = []
+    suppression: list[int] = []
 
 # Selection of Bolt Patterns
 bolt_patterns: list[BoltPattern] = [
-    # Name, center hole radius, pattern radius, hole size, # of holes, supression
-    BoltPattern('Kraken X60', 0.75, 2.0, 0.196, 12, [1,1,1,1,1,1,1,1,1,1,1,0]),
-    BoltPattern('Kraken X44', 0.75, 1.375, 0.196, 12, [1,1,1,1,1,1,1,1,1,1,1,0]),
-    BoltPattern('NEO Vortex', 0.75, 2.0, 0.196, 8, [1,1,1,0,1,1,1,0]),
+    # Name, center hole radius, pattern radius, hole size, # of holes, suppression
+    BoltPattern('Kraken X60', 0.75, 2.0, 0.196, 12, [0,0,0,0,0,0,0,0,0,0,0,1]),
+    BoltPattern('Kraken X44', 0.75, 1.375, 0.196, 12, [0,0,0,0,0,0,0,0,0,0,0,1]),
+    BoltPattern('NEO Vortex', 0.75, 2.0, 0.196, 8, [0,0,0,1,0,0,0,1]),
     BoltPattern('NEO 550', 0.5118, 0.9843, 0.125, 4, []),
-    BoltPattern('2" MultiMotor', 0.75, 2.0, 0.196, 24, [1,0,1,1,1,0, 1,0,1,1,1,0, 1,0,1,1,1,0, 1,0,1,1,1,0]),
+    BoltPattern('2" MultiMotor', 0.75, 2.0, 0.196, 24, [0,1,0,0,0,1, 0,1,0,0,0,1, 0,1,0,0,0,1, 0,1,0,0,0,1]),
 ]
 
 # Executed when add-in is run.
@@ -65,11 +65,11 @@ def start():
     # Find the the FRCTools submenu.
     submenu = panel.controls.itemById( config.DROPDOWN_ID )
 
-    # # Create the button command control in the UI.
-    # control = submenu.controls.addCommand(cmd_def)
+    # Create the button command control in the UI.
+    control = submenu.controls.addCommand(cmd_def)
 
-    # # Specify if the command is promoted to the main toolbar. 
-    # control.isPromoted = IS_PROMOTED
+    # Specify if the command is promoted to the main toolbar. 
+    control.isPromoted = IS_PROMOTED
 
 # Executed when add-in is stopped.
 def stop():
@@ -99,10 +99,16 @@ def stop():
 def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} command Created Event')
+    # futil.log(f'{CMD_NAME} command Created Event')
 
     # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
+
+    # Create a selection input.
+    centerSelection = inputs.addSelectionInput('center_selection', 'Center', 'Select the center of the bolt pattern')
+    centerSelection.addSelectionFilter( "SketchPoints" )
+    centerSelection.addSelectionFilter( "SketchCircles" )
+    centerSelection.setSelectionLimits( 1, 1 )
 
     # Bolt Patterns
     boltPattern = inputs.addDropDownCommandInput('bolt_pattern', 'Bolt Pattern', adsk.core.DropDownStyles.TextListDropDownStyle)
@@ -110,11 +116,6 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
         boltPattern.listItems.add( bp.name, True, '')
     boltPattern.listItems.item( 0 ).isSelected = True
 
-    # Create a selection input.
-    centerSelection = inputs.addSelectionInput('center_selection', 'Center', 'Select the center of the bolt pattern')
-    centerSelection.addSelectionFilter( "SketchPoints" )
-    centerSelection.addSelectionFilter( "SketchCircles" )
-    centerSelection.setSelectionLimits( 1, 1 )
 
     # TODO Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
@@ -128,18 +129,68 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    # futil.log(f'{CMD_NAME} Command Execute Event')
 
     inputs = args.command.commandInputs
-    boltPattern: adsk.core.DropDownCommandInput = inputs.itemById('bolt_pattern')
+    boltPatternInp: adsk.core.DropDownCommandInput = inputs.itemById('bolt_pattern')
     centerSelection: adsk.core.SelectionCommandInput = inputs.itemById('center_selection')
 
- 
+    centerPt: adsk.fusion.SketchPoint = None
+    selectedEntity = centerSelection.selection(0).entity
+    if selectedEntity.objectType == adsk.fusion.SketchCircle.classType() :
+        centerPt = selectedEntity.centerSketchPoint
+    elif selectedEntity.objectType == adsk.fusion.SketchPoint.classType() :
+        centerPt = selectedEntity
+    else :
+        futil.popup_error( f'  Cannot handle object type = {selectedEntity.objectType}')
+        return
+    
+    boltPattern = bolt_patterns[ boltPatternInp.selectedItem.index ]
+    sketch = centerPt.parentSketch
+
+    # Create the bolt pattern center hole
+    centerHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( centerPt, boltPattern.centerDia * 2.54 / 2 )
+    textPt = futil.offsetPoint3D( centerHole.centerSketchPoint.geometry, boltPattern.centerDia/4, boltPattern.centerDia/4, 0 )
+    centerDim = sketch.sketchDimensions.addDiameterDimension( centerHole, textPt )
+    centerDim.value = boltPattern.centerDia * 2.54
+
+    # Create the bolt pattern bolt circle
+    boltCircle = sketch.sketchCurves.sketchCircles.addByCenterRadius( centerPt, boltPattern.patternDia * 2.54 / 2 )
+    boltCircle.isConstruction = True
+    textPt = futil.offsetPoint3D( boltCircle.centerSketchPoint.geometry, -boltPattern.patternDia/4, boltPattern.patternDia/4, 0 )
+    boltCirDim = sketch.sketchDimensions.addDiameterDimension( boltCircle, textPt )
+    boltCirDim.value = boltPattern.patternDia * 2.54
+
+    # Create a single bolt hole
+    boltCenter = adsk.core.Point3D.create( boltPattern.patternDia * 2.54 / 2, boltPattern.patternDia/4, 0 )
+    boltHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( boltCenter, boltPattern.holeSize * 2.54 / 2 )
+    sketch.geometricConstraints.addCoincident( boltHole.centerSketchPoint, boltCircle )
+    textPt = futil.offsetPoint3D( boltHole.centerSketchPoint.geometry, boltPattern.holeSize/4, boltPattern.holeSize/4, 0 )
+    boltDim = sketch.sketchDimensions.addDiameterDimension( boltHole, textPt )
+    boltDim.value = boltPattern.holeSize * 2.54
+
+    # Create the hole pattern
+    cirPattern = sketch.geometricConstraints.createCircularPatternInput( [boltHole], centerPt )
+    # cirPattern.totalAngle = 2 * math.pi
+    cirPattern.quantity = futil.Value(boltPattern.numberOfHoles)
+
+    if len(boltPattern.suppression) > 0:
+        boolSuppression = []
+        for s in boltPattern.suppression :
+            boolSuppression.append( s == 1 )
+        # Remove first element bc it cannot be suppressed
+        boolSuppression.pop(0)
+        cirPattern.isSuppressed = boolSuppression
+
+    sketch.geometricConstraints.addCircularPattern( cirPattern )
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Preview Event')
+    # futil.log(f'{CMD_NAME} Command Preview Event')
+
+    command_execute( args )
+    args.isValidResult = True
 
 
 # This event handler is called when the user changes anything in the command dialog
@@ -149,7 +200,7 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     inputs = args.inputs
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
 
 
@@ -157,14 +208,14 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
 # which allows you to verify that all of the inputs are valid and enables the OK button.
 def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 
-    futil.log(f'{CMD_NAME} Command Validate Event')
+    # futil.log(f'{CMD_NAME} Command Validate Event')
 
     inputs = args.inputs
 
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Destroy Event')
+    # futil.log(f'{CMD_NAME} Command Destroy Event')
 
     global local_handlers
     local_handlers = []

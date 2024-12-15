@@ -13,7 +13,7 @@ ui = app.userInterface
 # TODO *** Specify the command identity information. ***
 CMD_ID = f'{config.COMPANY_NAME}_{config.ADDIN_NAME}_TimingBeltDialog'
 CMD_NAME = 'Extrude Timing Belt'
-CMD_Description = 'Extrude a Timing Belt from a pitch line or pitch circles'
+CMD_Description = 'Extrude a Timing Belt from a C-C Line or pitch circles'
 
 # Specify that the command will be promoted to the panel.
 IS_PROMOTED = True
