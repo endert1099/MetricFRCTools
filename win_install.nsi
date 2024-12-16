@@ -32,6 +32,8 @@
 ;--------------------------------
 ;Interface Configuration
 
+  !define MUI_ICON  ".\docs\icons\installer.ico"
+  !define MUI_UNICON  ".\docs\icons\installer.ico"
   !define MUI_HEADERIMAGE
   !define MUI_HEADERIMAGE_BITMAP ".\docs\icons\CCDistance.bmp" ; optional
   !define MUI_HEADERIMAGE_BITMAP_STRETCH "AspectFitHeight"
