@@ -4,7 +4,7 @@
 	"id":	"a1163e58-d70b-4233-8e48-c0ce0a6e703a",
 	"author":	"Team4698",
 	"description":	{
-		"":	"Useful tools for FRC design"
+		"":	"Useful tools for FRC design. \nhttps://github.com/4698RaiderRobotics/FRCTools/"
 	},
 	"version":	"1.0.3",
 	"runOnStartup":	true,

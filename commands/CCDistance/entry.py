@@ -295,9 +295,11 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     motionType.listItems.item( motionTypesDefault ).isSelected = True
 
     # Create a selection input.
-    curveSelection = inputs.addSelectionInput('curve_selection', 'Selection', 'Select nothing, a circle, a line, or two starting circles')
-    curveSelection.addSelectionFilter( "SketchCurves" )
-    curveSelection.setSelectionLimits( 1, 2 )
+    curveSelection = inputs.addSelectionInput('curve_selection', 'Selection', 'Select a circle, or a center point')
+    curveSelection.addSelectionFilter( "SketchCircles" )
+    curveSelection.addSelectionFilter( "SketchLines" )
+    curveSelection.addSelectionFilter( "SketchPoints" )
+    curveSelection.setSelectionLimits( 1, 1 )
 
     inputs.addBoolValueInput( "require_selection", "Require Selection", True, "", True )
 
@@ -348,16 +350,17 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     if not curveSelection:
         ccLine = target_CCLine
-    elif curveSelection.selectionCount == 1 and \
-       curveSelection.selection(0).entity.objectType == adsk.fusion.SketchCircle.classType() :
-        startSketchPt = curveSelection.selection(0).entity.centerSketchPoint
-    elif curveSelection.selectionCount == 1 and \
-         curveSelection.selection(0).entity.objectType == adsk.fusion.SketchLine.classType() :
-        ccLine.line = curveSelection.selection(0).entity
-    elif curveSelection.selectionCount == 2 and \
-         curveSelection.selection(0).entity.objectType == adsk.fusion.SketchCircle.classType() :
-        startSketchPt = curveSelection.selection(0).entity.centerSketchPoint
-        endSketchPt = curveSelection.selection(1).entity.centerSketchPoint
+    elif curveSelection.selectionCount == 1 :
+        selEntity = curveSelection.selection(0).entity
+        if selEntity.objectType == adsk.fusion.SketchCircle.classType() :
+            startSketchPt = selEntity.centerSketchPoint
+        elif selEntity.objectType == adsk.fusion.SketchLine.classType() :
+            if isCCLine( selEntity ) :
+                ccLine.line = selEntity
+            else :
+                startSketchPt = selEntity.startSketchPoint
+        else :
+            startSketchPt = selEntity
 
     if ccLine.line == None:
         ccLine.line = createCCLine( startSketchPt, endSketchPt )
@@ -431,15 +434,15 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
             curveSelection.clearSelection()
 
     if changed_input.id == 'curve_selection':
-        if curveSelection.selectionCount == 2:
-            # We have selected two entitites
-            if curveSelection.selection(0).entity.objectType == adsk.fusion.SketchLine.classType() or\
-            curveSelection.selection(1).entity.objectType == adsk.fusion.SketchLine.classType() :
-                # If either the first entity selected was a line or the newly selected entity
-                # is a line the only keep the newly selected item.  Don't allow a line with something else.
-                newSel = curveSelection.selection(1).entity
-                curveSelection.clearSelection()
-                curveSelection.addSelection( newSel )
+        # if curveSelection.selectionCount == 2:
+        #     # We have selected two entitites
+        #     if curveSelection.selection(0).entity.objectType == adsk.fusion.SketchLine.classType() or\
+        #     curveSelection.selection(1).entity.objectType == adsk.fusion.SketchLine.classType() :
+        #         # If either the first entity selected was a line or the newly selected entity
+        #         # is a line the only keep the newly selected item.  Don't allow a line with something else.
+        #         newSel = curveSelection.selection(1).entity
+        #         curveSelection.clearSelection()
+        #         curveSelection.addSelection( newSel )
 
         # Check if we have a previously configured CCLine selected or one of its children entities
         ccLine = None
