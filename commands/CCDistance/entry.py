@@ -693,6 +693,10 @@ def createCirclePair( line: adsk.fusion.SketchLine,
     endCircle = sketch.sketchCurves.sketchCircles.addByCenterRadius( line.endSketchPoint, dia2IN * 2.54 / 2 )
     endCircle.isConstruction = True
 
+    dimDir = adsk.core.Vector2D.create( dia2IN * 2.54 / 5, 0 )
+    rotMatrix = adsk.core.Matrix2D.create()
+    rotMatrix.setToRotation( dimAngleDeg * math.pi / 180, adsk.core.Point2D.create() )
+    dimDir.transformBy( rotMatrix )
     textPoint = futil.offsetPoint3D( endCircle.centerSketchPoint.geometry, dimDir.x, dimDir.y, 0 )
     diaDim2 = sketch.sketchDimensions.addDiameterDimension( endCircle, textPoint )
     diaDim2.value = dia2IN * 2.54
