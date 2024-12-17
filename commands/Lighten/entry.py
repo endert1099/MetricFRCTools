@@ -104,7 +104,7 @@ def stop():
 def command_created(args: adsk.core.CommandCreatedEventArgs):
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} command Created Event')
+    # futil.log(f'{CMD_NAME} command Created Event')
 
     # https://help.autodesk.com/view/fusion360/ENU/?contextId=CommandInputs
     inputs = args.command.commandInputs
@@ -126,15 +126,20 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     default_value = adsk.core.ValueInput.createByString('0.125')
     offsetDist = inputs.addValueInput('offset_distance', 'Offset Distance', defaultLengthUnits, default_value)
 
-    # Create a corner radius value input.
-    defaultLengthUnits = "in"
-    default_value = adsk.core.ValueInput.createByString('0.125')
-    cornerRadius = inputs.addValueInput('corner_radius', 'Corner Radius', defaultLengthUnits, default_value)
 
     # Create a pocket depth value input.
     defaultLengthUnits = "in"
     default_value = adsk.core.ValueInput.createByString('0.25')
     pocketDepth = inputs.addValueInput('pocket_depth', 'Pocket Depth', defaultLengthUnits, default_value)
+
+    # Disable filleting
+    inputs.addBoolValueInput( "disable_fillet", "Disable Filleting", True )
+
+    # Create a corner radius value input.
+    defaultLengthUnits = "in"
+    default_value = adsk.core.ValueInput.createByString('0.125')
+    cornerRadius = inputs.addValueInput('corner_radius', 'Corner Radius', defaultLengthUnits, default_value)
+    cornerRadius.isEnabled = True
 
     # Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
@@ -152,7 +157,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
 # is immediately called after the created event not command inputs were created for the dialog.
 def command_execute(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Execute Event')
+    # futil.log(f'{CMD_NAME} Command Execute Event')
 
     global lightenProfileList
 
@@ -160,6 +165,8 @@ def command_execute(args: adsk.core.CommandEventArgs):
     solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
     profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
     pocketDepth: adsk.core.ValueCommandInput = inputs.itemById('pocket_depth')
+    disableFillet: adsk.core.BoolValueCommandInput = inputs.itemById('disable_fillet')
+    cornerRadius: adsk.core.ValueCommandInput = inputs.itemById('corner_radius')
 
     solid: adsk.fusion.BRepBody = solidSelection.selection(0).entity
 
@@ -176,7 +183,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
             i += 1
             ui.progressBar.progressValue = i
             adsk.doEvents()
-            offsetProfile( profile )
+            offsetProfile( profile, True )   #   disableFillet.value )
 
     workingComp = solid.parentComponent
     sketch: adsk.fusion.Sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
@@ -192,14 +199,16 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     sketch.isComputeDeferred = False
     if sketch.profiles.count > 0 :
-        extrudeProfiles( solid, sketch, pocketDepth.value )
+        sideFaces = extrudeProfiles( solid, sketch, pocketDepth.value )
+        if not disableFillet.value:
+            filletProfiles( solid, sideFaces, cornerRadius.value )
 
     ui.progressBar.hide()
 
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Preview Event')
+    # futil.log(f'{CMD_NAME} Command Preview Event')
 
     if not ControlKeyHeldDown :
         command_execute( args )
@@ -214,12 +223,13 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     global lightenProfileList
 
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
     solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
     profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
-    cornerRadius: adsk.core.ValueCommandInput = inputs.itemById('corner_radius')
     offsetDist: adsk.core.ValueCommandInput = inputs.itemById('offset_distance')
+    disableFillet: adsk.core.BoolValueCommandInput = inputs.itemById('disable_fillet')
+    cornerRadius: adsk.core.ValueCommandInput = inputs.itemById('corner_radius')
 
     if changed_input.id == 'solid_selection' :
         profileSelection.clearSelection()
@@ -237,11 +247,11 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                 existingSelection = False
                 for liteProf in lightenProfileList:
                     if liteProf.profile == profile :
-                        futil.log(f'Found existing profile!!!')
+                        # futil.log(f'Found existing profile!!!')
                         existingSelection = True
                         break
                 if not existingSelection:
-                    futil.log(f'Adding new profile to global list .. .. .')
+                    # futil.log(f'Adding new profile to global list .. .. .')
                     lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
                 i += 1
         elif profileSelection.selectionCount < len(lightenProfileList) :
@@ -258,9 +268,18 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                     i += 1
                 if foundProfile :
                     newLPlist.append( liteProf )
-                else:
-                    futil.log(f'Removing profile from global list .. .. .')
+                # else:
+                #     futil.log(f'Removing profile from global list .. .. .')
+                    
             lightenProfileList = newLPlist
+
+    if changed_input.id == 'disable_fillet' :
+        for lp in lightenProfileList:
+            lp.isComputed = False
+        if disableFillet.value :
+            cornerRadius.isEnabled = False
+        else:
+            cornerRadius.isEnabled = True
 
     if changed_input.id == 'corner_radius' :
         # Force recompute of the profiles
@@ -285,7 +304,7 @@ def command_validate_input(args: adsk.core.ValidateInputsEventArgs):
 def command_keydown(args: adsk.core.KeyboardEventArgs):
     global ControlKeyHeldDown
 
-    futil.log(f'{CMD_NAME} KeyDown Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+    # futil.log(f'{CMD_NAME} KeyDown Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
  
     if args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier :
         ControlKeyHeldDown = True
@@ -293,7 +312,7 @@ def command_keydown(args: adsk.core.KeyboardEventArgs):
 def command_keyup(args: adsk.core.KeyboardEventArgs):
     global ControlKeyHeldDown
 
-    futil.log(f'{CMD_NAME} KeyUp Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
+    # futil.log(f'{CMD_NAME} KeyUp Event, code={args.keyCode}, mask={bin(args.modifierMask)}, isCtrl={args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier}')
 
     if not args.modifierMask & adsk.core.KeyboardModifiers.CtrlKeyboardModifier :
         if ControlKeyHeldDown :
@@ -305,19 +324,19 @@ def command_keyup(args: adsk.core.KeyboardEventArgs):
 # This event handler is called when the command terminates.
 def command_destroy(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Destroy Event')
+    # futil.log(f'{CMD_NAME} Command Destroy Event')
 
     global local_handlers
     local_handlers = []
 
 # def offsetProfile( solid: adsk.fusion.BRepBody, profile: LightenProfile ) :
-def offsetProfile( profile: LightenProfile ) :
+def offsetProfile( profile: LightenProfile, disableFillet: bool ) :
 
     # Create a temporary sketch
     workingComp = profile.profile.parentSketch.parentComponent
     sketch: adsk.fusion.Sketch = workingComp.sketches.add( profile.profile )
     sketch.isComputeDeferred = True
-    sketch.name = 'TempSketch'
+    sketch.name = 'LightenOffset'
 
     outline: list[adsk.fusion.SketchCurve] = []
     for curve in profile.outerLoop.profileCurves :
@@ -353,9 +372,16 @@ def offsetProfile( profile: LightenProfile ) :
     if failedOffset :
         sketch.deleteMe()
         return
-
+    
     offsetLoop = sketch.findConnectedCurves( offsetConstr.childCurves[0] )
-    futil.log(f'Found {len(offsetLoop)} Offset curves')
+    # futil.log(f'Found {len(offsetLoop)} Offset curves')
+
+    if disableFillet :
+        profile.filletedLoop = SketchCurveToCurve3D( offsetLoop )
+        profile.isComputed = True
+        sketch.deleteMe()
+        return
+
 
     loopRadii = findCurvesMaximumRadii( profile, offsetLoop )
 
@@ -382,7 +408,7 @@ def offsetProfile( profile: LightenProfile ) :
 
     return
 
-def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, depth: float ) :
+def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, depth: float ) -> adsk.core.ObjectCollection :
 
     extrudeProfiles = adsk.core.ObjectCollection.create()
     for p in sketch.profiles :
@@ -393,7 +419,31 @@ def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, de
     distance = adsk.fusion.DistanceExtentDefinition.create( cutDistance )
     extrudeCut.setOneSideExtent( distance, adsk.fusion.ExtentDirections.NegativeExtentDirection )
     extrudeCut.participantBodies = [ solid ]
-    extrudes.add( extrudeCut )
+    extrudeFeature = extrudes.add( extrudeCut )
+
+    return extrudeFeature.sideFaces
+
+def filletProfiles( solid: adsk.fusion.BRepBody, sideFaces: adsk.fusion.BRepFaces, cornerRadius: float ) :
+
+    # futil.log(f'   Number of Extrude side Faces = {extrudeFeature.sideFaces.count}')
+    i = 0
+    perpendicularEdges = adsk.core.ObjectCollection.create()
+    for s in sideFaces:
+        for edge in s.edges:
+            i += 1
+            [status, p0, p1] = edge.evaluator.getParameterExtents()
+            tangent = edge.evaluator.getTangent( p0 )[1]
+            if abs(tangent.dotProduct( adsk.core.Vector3D.create( 0, 0, 1 ))) > 0.0001 :
+                # futil.log(f'  edge Perpendicular tangent = {futil.format_Vector3D( tangent )}')
+                if not perpendicularEdges.contains( edge ) :
+                    perpendicularEdges.add( edge )
+    # futil.log(f'   Processed edges = {i}, perpendicular edges = {perpendicularEdges.count}')
+
+    fillets = solid.parentComponent.features.filletFeatures
+    filletFeatureInput = fillets.createInput()
+    filletRadius = adsk.core.ValueInput.createByReal( cornerRadius )
+    edgeSet = filletFeatureInput.edgeSetInputs.addConstantRadiusEdgeSet( perpendicularEdges, filletRadius, False)
+    fillets.add( filletFeatureInput )
 
     return
 
