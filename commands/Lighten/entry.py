@@ -14,7 +14,7 @@ CMD_NAME = 'Lighten'
 CMD_Description = 'Lighten a solid by pocketing'
 
 # Specify that the command will be promoted to the panel.
-IS_PROMOTED = True
+IS_PROMOTED = False
 
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')

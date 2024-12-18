@@ -16,7 +16,7 @@ CMD_NAME = 'Extrude Timing Belt'
 CMD_Description = 'Extrude a Timing Belt from a C-C Line or pitch circles'
 
 # Specify that the command will be promoted to the panel.
-IS_PROMOTED = True
+IS_PROMOTED = False
 
 # Resource location for command icons, here we assume a sub folder in this directory named "resources".
 ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resources', '')
@@ -93,6 +93,8 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     defaultLengthUnits = "mm"
     default_value = adsk.core.ValueInput.createByString('9')
     inputs.addValueInput('belt_width', 'Belt Width', defaultLengthUnits, default_value)
+
+    inputs.addBoolValueInput('suppress_teeth', 'Toothless Belt', True)
 
     # TODO Connect to the events that are needed by this command.
     futil.add_handler(args.command.execute, command_execute, local_handlers=local_handlers)
@@ -316,12 +318,13 @@ def extrudeBelt( sketch: adsk.fusion.Sketch, path: adsk.core.ObjectCollection,
 # This event handler is called when the command needs to compute a new preview in the graphics window.
 def command_preview(args: adsk.core.CommandEventArgs):
     # General logging for debug.
-    futil.log(f'{CMD_NAME} Command Preview Event')
+    # futil.log(f'{CMD_NAME} Command Preview Event')
     inputs = args.command.commandInputs
-
-    futil.log(f'    event = {args.firingEvent.name}')
+    suppressTeeth = inputs.itemById('suppress_teeth')
 
     command_execute( args )
+    if suppressTeeth.value :
+        args.isValidResult = True
 
 # This event handler is called when the user changes anything in the command dialog
 # allowing you to modify values of other inputs based on that change.
