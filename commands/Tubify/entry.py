@@ -2,6 +2,7 @@ import adsk.core
 import adsk.fusion
 import os
 import math
+import typing
 from ...lib import fusionAddInUtils as futil
 from ... import config
 app = adsk.core.Application.get()
@@ -23,13 +24,20 @@ ICON_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'resource
 # they are not released and garbage collected.
 local_handlers = []
 
-holeConfigs = (
-    (0, 0, 'No Holes'),
-    (4, 0.5, 'All 4 Sides 1/2" Spacing (WCP)'),
-    (4, 1, 'All 4 Sides 1" Spacing (VEX)'),     # Only for 1x1 tubing...
-    (2, 0.5, '2 Sides 1/2" Spacing (WCP)'),
-    (2, 1, '2 Sides 1" Spacing (VEX)'),
-)
+# Bolt Pattern struct
+class HoleConfig(typing.NamedTuple) :
+    number_sides_with_holes: int = 0
+    hole_spacing: float = 0.5
+    hole_diameter: float = 0.196
+    description: str = "unset"
+
+holeConfigs: list[HoleConfig] = [
+    HoleConfig(0, 0, 0.196, 'No Holes'),
+    HoleConfig(4, 0.5, 0.196, 'All 4 Sides 1/2" Spacing (WCP)'),
+    HoleConfig(4, 1, 0.196, 'All 4 Sides 1" Spacing (VEX)'),     # Only for 1x1 tubing...
+    HoleConfig(2, 0.5, 0.196, '2 Sides 1/2" Spacing (WCP)'),
+    HoleConfig(2, 1, 0.196, '2 Sides 1" Spacing (VEX)'),
+]
 
 holeCfgDefault = 0      #   No Holes
 
@@ -45,19 +53,16 @@ wallThicknessesDefault = wallThicknesses.index( (0.125, '1/8"') )
 class TubifyParams :
     solid: adsk.fusion.BRepBody = None
     wall_thickness: float = 0.125
-    sides_with_holes: int = 0
-    hole_spacing: float = 0.5
-    end_offset: float = 0.5
+    config: HoleConfig = None
+    end_offset: float = 0.0
     showPartialHoles: bool = True
 
-    def __init__( self, solid: adsk.fusion.BRepBody, wThickIdx: int, holeSidesIdx, endOffset, showPartialHoles ) :
+    def __init__( self, solid: adsk.fusion.BRepBody, wThickIdx: int, holeConfigIdx, endOffsetIn, showPartialHoles ) :
         self.solid = solid
         thicknessCfg = wallThicknesses[ wThickIdx ]
         self.wall_thickness = thicknessCfg[0]
-        holeCfg = holeConfigs[ holeSidesIdx ]
-        self.sides_with_holes = holeCfg[0]
-        self.hole_spacing = holeCfg[1]
-        self. end_offset = endOffset
+        self.config = holeConfigs[ holeConfigIdx ]
+        self.end_offset = endOffsetIn
         self.showPartialHoles = showPartialHoles
 
 # Executed when add-in is run.
@@ -123,7 +128,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     # Create a simple text box input.
     holeSidesInp = inputs.addDropDownCommandInput('hole_sides', 'Hole Sides', adsk.core.DropDownStyles.TextListDropDownStyle)
     for holeCfg in holeConfigs:
-        holeSidesInp.listItems.add( holeCfg[2], False, '')
+        holeSidesInp.listItems.add( holeCfg.description, False, '')
     holeSidesInp.listItems.item( holeCfgDefault ).isSelected = True
 
     # Create a simple text box input.
@@ -139,7 +144,7 @@ def command_created(args: adsk.core.CommandCreatedEventArgs):
     endOffset.isVisible = False
 
     # Create a checkbox for partial holes.
-    showPartialHoles = inputs.addBoolValueInput( "create_partial_holes", "Show Partial Holes", True )
+    showPartialHoles = inputs.addBoolValueInput( "create_partial_holes", "Show Partial Holes", True, "", True )
     showPartialHoles.isVisible = False
 
     # TODO Connect to the events that are needed by this command.
@@ -166,22 +171,25 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     wThickIdx = wallThickness.selectedItem.index
     holeSidesIdx = holeSides.selectedItem.index
-    endOffsetIn = endOffset.value
+    endOffsetIn = endOffset.value / 2.54
 
-    # ui.progressBar.show( 'Tubifying ... %v of %m', 0, solidSelection.selectionCount - 1 )
+    ui.progressBar.show( 'Tubifying ... %v of %m', 0, solidSelection.selectionCount - 1 )
+    try :
+        i = 0
+        while i < solidSelection.selectionCount :
+            ui.progressBar.progressValue = i
+            adsk.doEvents()
+            solid: adsk.fusion.BRepBody = solidSelection.selection(i).entity
+            if solid.vertices.count != 8 :
+                futil.popup_error(f'Invalid number of vertices in body!  Should be 8 got {solid.vertices.count}')
+            else :
+                tubifyInfo = TubifyParams( solid, wThickIdx, holeSidesIdx, endOffsetIn, showPartialHoles )
+                tubifySolid( tubifyInfo )
+            i += 1
+    except:
+        futil.handle_error( '        ============  Tubify Failed  ============\n\n', True )
 
-    i = 0
-    while i < solidSelection.selectionCount :
-        # ui.progressBar.progressValue = i
-        # adsk.doEvents()
-        solid: adsk.fusion.BRepBody = solidSelection.selection(i).entity
-        if solid.vertices.count != 8 :
-            futil.popup_error(f'Invalid number of vertices in body!  Should be 8 got {solid.vertices.count}')
-        else :
-            tubifyInfo = TubifyParams( solid, wThickIdx, holeSidesIdx, endOffsetIn, showPartialHoles )
-            tubifySolid( tubifyInfo )
-        i += 1
-    # ui.progressBar.hide()
+    ui.progressBar.hide()
 
 # Tubify and single BRep solid
 def tubifySolid( tubifyInfo: TubifyParams ) :
@@ -259,7 +267,7 @@ def tubifySolid( tubifyInfo: TubifyParams ) :
     shells.add( shellSolidInput )
 
     # If no holes just return
-    if tubifyInfo.sides_with_holes == 0 :
+    if tubifyInfo.config.number_sides_with_holes == 0 :
         return
 
     # 2 Side Holes
@@ -269,7 +277,7 @@ def tubifySolid( tubifyInfo: TubifyParams ) :
         createHoleProfiles( workingComp, tubifyInfo, wideSideFaces, longLength )
 
     # 4 Side Holes
-    if tubifyInfo.sides_with_holes == 4 : 
+    if tubifyInfo.config.number_sides_with_holes == 4 : 
         if isRectangle :
             createHoleProfiles( workingComp, tubifyInfo, wideSideFaces, longLength )
         else :
@@ -300,7 +308,7 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
 
     if changed_input.id == 'hole_sides' :
         holeCfg = holeConfigs[ holeSides.selectedItem.index ]
-        if holeCfg[0] == 0 :
+        if holeCfg.number_sides_with_holes == 0 :
             # No holes
             endOffset.isVisible = False
             showPartialHoles.isVisible = False
@@ -361,20 +369,33 @@ def createHoleProfiles(
     lengthIn = longEdge.length / 2.54
     widthIn = shortEdge.length / 2.54
         
-    cornerPoint = longEdge.endSketchPoint
-    if longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.startSketchPoint.geometry ) :
-        # futil.log( f'longEdge end is shortEdge Start.')
-        None
+    leUnitVec = futil.sketchLineUnitVec( longEdge )
+    seUnitVec = futil.sketchLineUnitVec( shortEdge )
+    if longEdge.startSketchPoint.geometry.isEqualTo( shortEdge.startSketchPoint.geometry ) :
+        # Set the corner point, unit vectors are correct.
+        cornerPoint = longEdge.startSketchPoint
+        # futil.log( f'longEdge Start is shortEdge Start.')
+    elif longEdge.startSketchPoint.geometry.isEqualTo( shortEdge.endSketchPoint.geometry ) :
+        # Set the corner point, se unit vector is flipped.
+        cornerPoint = longEdge.startSketchPoint
+        seUnitVec = futil.multVector2D( seUnitVec, -1.0 )
+        # futil.log( f'longEdge Start is shortEdge End.')
+    elif longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.startSketchPoint.geometry ) :
+        # Set the corner point, le unit vector is flipped.
+        cornerPoint = longEdge.endSketchPoint
+        leUnitVec = futil.multVector2D( leUnitVec, -1.0 )
+        # futil.log( f'longEdge End is shortEdge Start.')
     elif longEdge.endSketchPoint.geometry.isEqualTo( shortEdge.endSketchPoint.geometry ) :
-        # futil.log( f'longEdge end is shortEdge end.')
-        None
-    elif shortEdge.endSketchPoint.geometry.isEqualTo( longEdge.startSketchPoint.geometry ) :
-        cornerPoint = shortEdge.endSketchPoint
-        # futil.log( f'shortEdge end is longEdge Start.')
-    elif shortEdge.startSketchPoint.geometry.isEqualTo( longEdge.startSketchPoint.geometry ) :
-        cornerPoint = shortEdge.startSketchPoint
-        # futil.log( f'shortEdge start is longEdge Start.')
+        # Set the corner point, both unit vectors are flipped.
+        cornerPoint = longEdge.endSketchPoint
+        leUnitVec = futil.multVector2D( leUnitVec, -1.0 )
+        seUnitVec = futil.multVector2D( seUnitVec, -1.0 )
+        # futil.log( f'longEdge End is shortEdge End.')
+        # futil.print_SketchCurve( longEdge )
+        # futil.print_SketchCurve( shortEdge )
+        # futil.log( f'leUnitVec= {futil.format_Vector2D(leUnitVec)}, seUnitVec= {futil.format_Vector2D(seUnitVec)}')
     else:
+        # We should never get here!!!
         futil.print_Point3D( longEdge.startSketchPoint.geometry, "longEdge start: ")
         futil.print_Point3D( longEdge.endSketchPoint.geometry, "longEdge end: ")
         futil.print_Point3D( shortEdge.startSketchPoint.geometry, "shortEdge start: ")
@@ -382,36 +403,58 @@ def createHoleProfiles(
         futil.popup_error(f'Unhandled shortEdge/longEdge point case.')
         return
 
+    # Determine what the length dimension should be for the first hole
+    if tubifyInfo.config.hole_spacing - tubifyInfo.end_offset < tubifyInfo.config.hole_diameter/2.0 :
+        # Negative means the hole center should be off the solid initially
+        LengthOffsetIn = -1.0 * (tubifyInfo.config.hole_spacing - tubifyInfo.end_offset)
+    else :
+        LengthOffsetIn = tubifyInfo.end_offset
+
+    # futil.log( f'hs={tubifyInfo.config.hole_spacing} off={tubifyInfo.end_offset}, dia={tubifyInfo.config.hole_diameter}')
+    # futil.log( f'LengthOffset={LengthOffsetIn}')
     # Create the corner hole to use as the rectangular pattern
-    holeDiameter = 0.196 * 2.54
-    centroid = futil.BBCentroid( sketch.boundingBox )
-    cornerHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( centroid, holeDiameter / 2 )
+    holeDiameter = tubifyInfo.config.hole_diameter * 2.54
+    if LengthOffsetIn > 0 :
+        diag = leUnitVec.copy()
+        diag.add( seUnitVec )
+        holeCenterPt = adsk.core.Point3D.create( diag.x, diag.y, 0 )
+    else :
+        diag = futil.multVector2D( leUnitVec, -1.0 )
+        diag.add( seUnitVec )
+        holeCenterPt = adsk.core.Point3D.create( diag.x, diag.y, 0 )
+    holeCenterPt = futil.addPoint3D( holeCenterPt, cornerPoint.geometry )
+    # futil.log( f' -------- Corner Hole center point:::')
+    # futil.print_Point3D( holeCenterPt )
+    cornerHole = sketch.sketchCurves.sketchCircles.addByCenterRadius( holeCenterPt, holeDiameter / 2 )
     textPoint = futil.offsetPoint3D( cornerHole.centerSketchPoint.geometry, 0.1, 0.1, 0 )
     diamDim = sketch.sketchDimensions.addDiameterDimension( cornerHole, textPoint )
     diamDim.value = holeDiameter
 
     # Create the width direction dimension
     textPoint = cornerPoint.geometry
-    horizDim = sketch.sketchDimensions.addDistanceDimension( 
-        cornerHole.centerSketchPoint, cornerPoint, 
-        adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation, textPoint )
-    horizDim.value = 0.5 * 2.54
+    widthDim = sketch.sketchDimensions.addOffsetDimension( 
+        longEdge, cornerHole.centerSketchPoint, textPoint )
+    widthDim.value = 0.5 * 2.54
 
-    # Determine what the length dimension should be for the first hole
-    dimValue = tubifyInfo.end_offset
-    if abs( dimValue - tubifyInfo.hole_spacing ) < 0.001 :
-        dimValue = 0 
+    # horizDim = sketch.sketchDimensions.addDistanceDimension( 
+    #     cornerHole.centerSketchPoint, cornerPoint, 
+    #     adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation, textPoint )
+    # horizDim.value = 0.5 * 2.54
+
 
     # Either create the length direction dimension of make the center
     # coincident with the end line if the offset is zero.
-    if abs( dimValue ) < 0.001 :
+    if abs( LengthOffsetIn ) < 0.001 :
         sketch.geometricConstraints.addCoincident( cornerHole.centerSketchPoint, shortEdge )
     else :
         textPoint = cornerPoint.geometry
-        vertDim = sketch.sketchDimensions.addDistanceDimension( 
-            cornerHole.centerSketchPoint, cornerPoint, 
-            adsk.fusion.DimensionOrientations.VerticalDimensionOrientation, textPoint )
-        vertDim.value = dimValue
+        lengthDim = sketch.sketchDimensions.addOffsetDimension( 
+            shortEdge, cornerHole.centerSketchPoint, textPoint )
+        lengthDim.value = abs(LengthOffsetIn * 2.54)
+        # vertDim = sketch.sketchDimensions.addDistanceDimension( 
+        #     cornerHole.centerSketchPoint, cornerPoint, 
+        #     adsk.fusion.DimensionOrientations.VerticalDimensionOrientation, textPoint )
+        # vertDim.value = dimValue
 
     # Create the rectangular pattern
     rectPattern = sketch.geometricConstraints.createRectangularPatternInput( 
@@ -422,7 +465,7 @@ def createHoleProfiles(
     # Determine the number repeats in the rectangular pattern
     widthRepeats = int( (widthIn / 0.5) - 0.5 )
         
-    lengthRepeats = int( (lengthIn / tubifyInfo.hole_spacing) + 0.5 )
+    lengthRepeats = int( (lengthIn / tubifyInfo.config.hole_spacing) + 0.5 )
     if tubifyInfo.showPartialHoles :
         lengthRepeats += 1
 
@@ -439,7 +482,7 @@ def createHoleProfiles(
     rectPattern.quantityOne = futil.Value( widthRepeats )
 
     # Setup the length hole spacing and number of holes
-    rectPattern.distanceTwo = futil.Value( tubifyInfo.hole_spacing )
+    rectPattern.distanceTwo = futil.Value( tubifyInfo.config.hole_spacing )
     rectPattern.quantityTwo = futil.Value( lengthRepeats )
     sketch.geometricConstraints.addRectangularPattern( rectPattern )
 

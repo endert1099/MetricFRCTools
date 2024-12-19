@@ -176,32 +176,35 @@ def command_execute(args: adsk.core.CommandEventArgs):
             ComputesNeeded += 1
     
     ui.progressBar.show( '%p Done. Processing Profile %v of %m', 0, ComputesNeeded + 1 )
+    try:
+        i = 0
+        for profile in lightenProfileList:
+            if not profile.isComputed :
+                i += 1
+                ui.progressBar.progressValue = i
+                adsk.doEvents()
+                offsetProfile( profile, True )   #   disableFillet.value )
 
-    i = 0
-    for profile in lightenProfileList:
-        if not profile.isComputed :
-            i += 1
-            ui.progressBar.progressValue = i
-            adsk.doEvents()
-            offsetProfile( profile, True )   #   disableFillet.value )
+        workingComp = solid.parentComponent
+        sketch: adsk.fusion.Sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
+        sketch.isComputeDeferred = True
+        sketch.name = 'Lighten'
 
-    workingComp = solid.parentComponent
-    sketch: adsk.fusion.Sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
-    sketch.isComputeDeferred = True
-    sketch.name = 'Lighten'
+        for profile in lightenProfileList:
+            if profile.isComputed:
+                Curves3DToSketch( sketch, profile.filletedLoop )
+        
+        ui.progressBar.progressValue = i + 1
+        adsk.doEvents()
 
-    for profile in lightenProfileList:
-        if profile.isComputed:
-            Curves3DToSketch( sketch, profile.filletedLoop )
-    
-    ui.progressBar.progressValue = i + 1
-    adsk.doEvents()
+        sketch.isComputeDeferred = False
+        if sketch.profiles.count > 0 :
+            sideFaces = extrudeProfiles( solid, sketch, pocketDepth.value )
+            if not disableFillet.value:
+                filletProfiles( solid, sideFaces, cornerRadius.value )
 
-    sketch.isComputeDeferred = False
-    if sketch.profiles.count > 0 :
-        sideFaces = extrudeProfiles( solid, sketch, pocketDepth.value )
-        if not disableFillet.value:
-            filletProfiles( solid, sideFaces, cornerRadius.value )
+    except Exception as e:
+        futil.handle_error( '        ============  Lighten Failed  ============\n\n', True )
 
     ui.progressBar.hide()
 
