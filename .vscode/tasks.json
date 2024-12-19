@@ -7,25 +7,7 @@
             "label": "Create Installer and Zip Archive",
             "type": "shell",
             "problemMatcher": [],
-            "command": "& 'C:/Program Files/7-Zip/7z.exe' a FRCTools.zip *.py *.manifest -ir!lib\\* -ir!icons\\* -ir!commands\\* -xr!__pycache__",
-            "dependsOn": ["ClearZip", "CreateInstaller"]
+            "command": "bash ./bundle.sh",
         },        
-        {
-            // Delete the contents of the zip file or create and empty one.
-            "label": "ClearZip",
-            "type": "shell",
-            "hide": true,
-            "problemMatcher": [],
-            "command": "& 'C:/Program Files/7-Zip/7z.exe' d FRCTools.zip *"
-        },
-        {
-            // Create a windows installer .exe file using NSIS.
-            "label": "CreateInstaller",
-            "type": "shell",
-            "hide": true,
-            "problemMatcher": [],
-            "command": "& 'C:/Program Files (x86)/NSIS/makensis.exe' /V4 win_install.nsi"
-        },
-
     ]
 }

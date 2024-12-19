@@ -6,7 +6,7 @@
 	"description":	{
 		"":	"Useful tools for FRC design. \nhttps://github.com/4698RaiderRobotics/FRCTools/"
 	},
-	"version":	"1.0.4",
+	"version":	"1.0.4-alpha",
 	"runOnStartup":	true,
 	"supportedOS":	"windows|mac",
 	"editEnabled":	true

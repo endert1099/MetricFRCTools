@@ -17,7 +17,7 @@
 
   ;Name and file
   Name "${APP_DESCRIPTION}"
-  OutFile "FRCTools-win.exe"
+  OutFile "build/FRCTools-win.exe"
   Unicode True
 
   ;Default installation folder
