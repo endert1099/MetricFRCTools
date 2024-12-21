@@ -35,7 +35,7 @@ class LightenProfile:
     area: float = 0.0
 
     isComputed: bool = False
-    filletedLoop: adsk.core.ObjectCollection = None
+    filletedLoops = []
 
     def __init__(self, profile: adsk.fusion.Profile, offset: float, radius: float ):
         self.profile = profile
@@ -187,21 +187,22 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
         workingComp = solid.parentComponent
         sketch: adsk.fusion.Sketch = workingComp.sketches.add( profileSelection.selection(0).entity )
-        sketch.isComputeDeferred = True
+        # sketch.isComputeDeferred = True
         sketch.name = 'Lighten'
 
         for profile in lightenProfileList:
             if profile.isComputed:
-                Curves3DToSketch( sketch, profile.filletedLoop )
-        
+                for loop in profile.filletedLoops:
+                    Curves3DToSketch( sketch, loop )
+
         ui.progressBar.progressValue = i + 1
         adsk.doEvents()
 
-        sketch.isComputeDeferred = False
+        # sketch.isComputeDeferred = False
         if sketch.profiles.count > 0 :
-            sideFaces = extrudeProfiles( solid, sketch, pocketDepth.value )
+            extrudeFeat = extrudeProfiles( solid, sketch, pocketDepth.value )
             if not disableFillet.value:
-                filletProfiles( solid, sideFaces, cornerRadius.value )
+                filletProfiles( solid, extrudeFeat, cornerRadius.value )
 
     except Exception as e:
         futil.handle_error( '        ============  Lighten Failed  ============\n\n', True )
@@ -226,7 +227,7 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     global lightenProfileList
 
     # General logging for debug.
-    # futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
+    futil.log(f'{CMD_NAME} Input Changed Event fired from a change to {changed_input.id}')
 
     solidSelection: adsk.core.SelectionCommandInput = inputs.itemById('solid_selection')
     profileSelection: adsk.core.SelectionCommandInput = inputs.itemById('profile_selection')
@@ -242,6 +243,7 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
     if changed_input.id == 'profile_selection' :
         if profileSelection.selectionCount == 0:
             lightenProfileList = []
+            futil.log(f'Cleared global list')
         elif profileSelection.selectionCount > len(lightenProfileList) :
             # We added a profile selection
             i = 0
@@ -250,11 +252,11 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                 existingSelection = False
                 for liteProf in lightenProfileList:
                     if liteProf.profile == profile :
-                        # futil.log(f'Found existing profile!!!')
+                        futil.log(f'Found existing profile!!!')
                         existingSelection = True
                         break
                 if not existingSelection:
-                    # futil.log(f'Adding new profile to global list .. .. .')
+                    futil.log(f'Adding new profile to global list .. .. .')
                     lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
                 i += 1
         elif profileSelection.selectionCount < len(lightenProfileList) :
@@ -271,10 +273,13 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                     i += 1
                 if foundProfile :
                     newLPlist.append( liteProf )
-                # else:
-                #     futil.log(f'Removing profile from global list .. .. .')
+                else:
+                    futil.log(f'Removing profile from global list .. .. .')
                     
             lightenProfileList = newLPlist
+                    
+        futil.log(f'Global list has {len(lightenProfileList)} items....')
+
 
     if changed_input.id == 'disable_fillet' :
         for lp in lightenProfileList:
@@ -376,11 +381,30 @@ def offsetProfile( profile: LightenProfile, disableFillet: bool ) :
         sketch.deleteMe()
         return
     
+    # futil.print_Profiles( sketch.profiles )
+
+    profile.filletedLoops = []
+    for prof in sketch.profiles:
+        profloop = []
+        for e in prof.profileLoops.item(0).profileCurves:
+            profloop.append( e.geometry )
+        # entity = prof.profileLoops.item(0).profileCurves.item(0).sketchEntity
+        # futil.log(f'Finding connected curves to:')
+        # futil.print_SketchCurve( entity )
+        # offsetLoop = sketch.findConnectedCurves( entity )
+        # futil.log(f'Found {len(profloop)} Offset curves in profile.')
+        profile.filletedLoops.append( profloop )
+        # profile.filletedLoops.append( SketchCurveToCurve3D( profloop ) )
+
+    profile.isComputed = True
+    sketch.deleteMe()
+    return
+
     offsetLoop = sketch.findConnectedCurves( offsetConstr.childCurves[0] )
-    # futil.log(f'Found {len(offsetLoop)} Offset curves')
+    futil.log(f'Found {len(offsetLoop)} Offset curves')
 
     if disableFillet :
-        profile.filletedLoop = SketchCurveToCurve3D( offsetLoop )
+        profile.filletedLoops = SketchCurveToCurve3D( offsetLoop )
         profile.isComputed = True
         sketch.deleteMe()
         return
@@ -411,7 +435,7 @@ def offsetProfile( profile: LightenProfile, disableFillet: bool ) :
 
     return
 
-def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, depth: float ) -> adsk.core.ObjectCollection :
+def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, depth: float ) -> adsk.fusion.ExtrudeFeature :
 
     extrudeProfiles = adsk.core.ObjectCollection.create()
     for p in sketch.profiles :
@@ -423,24 +447,61 @@ def extrudeProfiles( solid: adsk.fusion.BRepBody, sketch: adsk.fusion.Sketch, de
     extrudeCut.setOneSideExtent( distance, adsk.fusion.ExtentDirections.NegativeExtentDirection )
     extrudeCut.participantBodies = [ solid ]
     extrudeFeature = extrudes.add( extrudeCut )
+    extrudeFeature
 
-    return extrudeFeature.sideFaces
+    return extrudeFeature
 
-def filletProfiles( solid: adsk.fusion.BRepBody, sideFaces: adsk.fusion.BRepFaces, cornerRadius: float ) :
+def filletProfiles( solid: adsk.fusion.BRepBody, extrudeFeat: adsk.fusion.ExtrudeFeature, cornerRadius: float ) :
 
-    # futil.log(f'   Number of Extrude side Faces = {extrudeFeature.sideFaces.count}')
+    # futil.log(f'   Number of Extrude side Faces = {extrudeFeat.sideFaces.count}')
     i = 0
     perpendicularEdges = adsk.core.ObjectCollection.create()
-    for s in sideFaces:
+    if extrudeFeat.profile.objectType == adsk.core.ObjectCollection.classType():
+        profOrPlane = extrudeFeat.profile.item(0)
+    else :
+        profOrPlane = extrudeFeat.profile
+
+    if profOrPlane.objectType == adsk.fusion.Profile.classType():
+        prof: adsk.fusion.Profile = profOrPlane
+        sketch = prof.parentSketch
+        sketchToModelTransform = sketch.transform
+        plane = prof.plane
+        # planeNormal = prof.plane.normal
+        # planeNormal.transformBy( sketchToModelTransform )
+        plane.transformBy( sketchToModelTransform )
+        planeNormal = plane.normal
+    else :
+        futil.popup_error( f'Unhandled planar entity {extrudeFeat.profile.objectType}')
+        planeNormal = adsk.core.Vector3D.create( 0, 0, 1 )
+        plane = adsk.core.Plane.create( adsk.core.Point3D.create(), planeNormal)
+
+    # futil.log(f'  Extrude profile plane normal = {futil.format_Vector3D( planeNormal )}')
+
+    # sidx = 1
+    for s in extrudeFeat.sideFaces:
+        # futil.log(f'  Side face #{sidx}')
+        # eidx = 1
         for edge in s.edges:
             i += 1
-            [status, p0, p1] = edge.evaluator.getParameterExtents()
-            tangent = edge.evaluator.getTangent( p0 )[1]
-            if abs(tangent.dotProduct( adsk.core.Vector3D.create( 0, 0, 1 ))) > 0.0001 :
-                # futil.log(f'  edge Perpendicular tangent = {futil.format_Vector3D( tangent )}')
-                if not perpendicularEdges.contains( edge ) :
-                    perpendicularEdges.add( edge )
-    # futil.log(f'   Processed edges = {i}, perpendicular edges = {perpendicularEdges.count}')
+            # [status, p0, p1] = edge.evaluator.getParameterExtents()
+            # tangent = edge.evaluator.getTangent( p0 )[1]
+            # futil.log(f'      Edge #{eidx}, length = {edge.length}, tangent ={futil.format_Vector3D( tangent )}')
+            if edge.geometry.objectType == adsk.core.Line3D.classType():
+                line:adsk.core.Line3D = edge.geometry
+                # futil.log(f'Processing a Line3D for perp. and intersection.....')
+                # futil.print_Curve3D( line )
+                # futil.log(f'    Is perpendicular = {plane.isPerpendicularToLine( line )}')
+                # intersectObj = plane.intersectWithCurve(line)
+                # futil.log(f'    Intersects = {intersectObj},  len={intersectObj.count}')
+                if plane.isPerpendicularToLine( line ) and len(plane.intersectWithCurve(line)) > 0 :
+                # if abs(tangent.dotProduct( planeNormal )) > 0.0001 :
+                    # futil.log(f'  edge Perpendicular tangent = {futil.format_Vector3D( tangent )}')
+                    if not perpendicularEdges.contains( edge ) :
+                        perpendicularEdges.add( edge )
+        #     eidx += 1
+        # sidx += 1
+
+    futil.log(f'   Processed edges = {i}, perpendicular edges = {perpendicularEdges.count}')
 
     fillets = solid.parentComponent.features.filletFeatures
     filletFeatureInput = fillets.createInput()

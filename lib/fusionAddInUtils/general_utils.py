@@ -141,7 +141,7 @@ def print_Curve2D( curve: adsk.core.Curve2D ) :
         log(f'Line2D: {format_Point2D(line.startPoint)} -- {format_Point2D(line.endPoint)}')
     elif curve.objectType == adsk.core.Arc2D.classType() :
         arc: adsk.core.Arc2D = curve
-        str = f'Arc2D: {format_Point2D(arc.startPoint)} -- {format_Point2D(arc.endPoint)}'
+        str = f'Arc2D: C{format_Point2D(arc.center)}, {format_Point2D(arc.startPoint)} -- {format_Point2D(arc.endPoint)}'
         str += f', R={arc.radius:.4}'
         log(str)
     elif curve.objectType == adsk.core.Circle2D.classType() :
@@ -161,7 +161,7 @@ def print_Curve3D( curve: adsk.core.Curve3D ) :
         log(f'Line3D: {format_Point3D(line.startPoint)} -- {format_Point3D(line.endPoint)}')
     elif curve.objectType == adsk.core.Arc3D.classType() :
         arc: adsk.core.Arc3D = curve
-        str = f'Arc3D: {format_Point3D(arc.startPoint)} -- {format_Point3D(arc.endPoint)}'
+        str = f'Arc3D: C{format_Point3D(arc.center)}, {format_Point3D(arc.startPoint)} -- {format_Point3D(arc.endPoint)}'
         str += f', R={arc.radius:.4}'
         log(str)
     elif curve.objectType == adsk.core.Circle3D.classType() :
@@ -173,6 +173,28 @@ def print_Curve3D( curve: adsk.core.Curve3D ) :
         log(f'print_Curve3D() --> {curve.objectType} Not handled.')
     # log(f'    is2D({curve.is2D}), isDeletable({curve.isDeletable}), isFixed({curve.isFixed}), isFullyConstrained({curve.isFullyConstrained})')
     # log(f'    isLinked({curve.isLinked}), isReference({curve.isReference}), isValid({curve.isValid}), isVisible({curve.isVisible})')
+
+def print_Profiles( profiles: adsk.fusion.Profiles ) :
+    log(f'========= Listing for {profiles.count} Profiles =========')
+    pidx = 0
+    while pidx < profiles.count:
+        p = profiles.item( pidx )
+        log(f'    Profile #{pidx+1}, number of loops={p.profileLoops.count}:')
+        lidx = 0
+        while lidx < p.profileLoops.count:
+            l = p.profileLoops.item(lidx)
+            log(f'        Loop #{lidx+1}, number of curves = {l.profileCurves.count}')
+            cidx = 0
+            while cidx < l.profileCurves.count:
+                c = l.profileCurves.item(cidx)
+                log(f'            Sketch Entity for Curve #{cidx+1}:')
+                print_SketchCurve( c.sketchEntity )
+                log(f'            geometry for Curve #{cidx+1}:')
+                print_Curve3D( c.geometry )
+                cidx += 1
+            lidx += 1
+        pidx += 1
+
 
 def print_Attributes( entity: adsk.fusion.SketchEntity ) :
     log(f'Entity {entity.objectType} has {len(entity.attributes)} attributes')
