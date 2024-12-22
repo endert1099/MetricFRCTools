@@ -251,7 +251,7 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
             # We added a profile selection
             i = 0
             while i < profileSelection.selectionCount:
-                profile = profileSelection.selection(i).entity
+                profile: adsk.fusion.Profile = profileSelection.selection(i).entity
                 existingSelection = False
                 for liteProf in lightenProfileList:
                     if liteProf.profile == profile :
@@ -259,8 +259,23 @@ def command_input_changed(args: adsk.core.InputChangedEventArgs):
                         existingSelection = True
                         break
                 if not existingSelection:
-                    # futil.log(f'Adding new profile to global list .. .. .')
-                    lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
+                    futil.log(f'Attempting to add new profile to global list .. .. .')
+                    if len(lightenProfileList) > 0 :
+                        existingPlane = lightenProfileList[0].profile.plane
+                        existingPlane.transformBy( lightenProfileList[0].profile.parentSketch.transform )
+                        newPlane = profile.plane
+                        newPlane.transformBy( profile.parentSketch.transform )
+                        if existingPlane.isCoPlanarTo( newPlane ) :
+                            futil.log(f'Adding new profile to global list .. .. .')
+                            lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
+                        else:
+                            futil.popup_error( f'Selected profile is not coplanar with other selected profiles.')
+                            profileSelection.clearSelection()
+                            for liteProf in lightenProfileList:
+                                profileSelection.addSelection( liteProf.profile )
+                    else:
+                        futil.log(f'Adding new profile to empty global list .. .. .')
+                        lightenProfileList.append( LightenProfile( profile, offsetDist.value, cornerRadius.value ))
                 i += 1
         elif profileSelection.selectionCount < len(lightenProfileList) :
             # We removed a profile selection
