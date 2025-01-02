@@ -1,8 +1,8 @@
 #!/bin/bash
 
 build_path="./build"
-program_basename="FRCTools"
-version=`gawk '/version/ {gsub(/\042|,/, ""); print $2 }' ./FRCTools.manifest`
+program_basename="MetricFRCTools"
+version=`gawk '/version/ {gsub(/\042|,/, ""); print $2 }' ./MetricFRCTools.manifest`
 
 echo "Extracted version is $version"
 

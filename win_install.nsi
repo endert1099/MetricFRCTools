@@ -6,9 +6,9 @@
 
   !include "MUI2.nsh"
   
-  !define APP_REG_ID "FRCTools"
+  !define APP_REG_ID "MetricFRCTools"
   
-  !define APP_DESCRIPTION "FRC Tools for Fusion"
+  !define APP_DESCRIPTION "A version of FRCTools for those who dont use freedom units"
 
   !define UNINSTALL_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_REG_ID}"
 
@@ -17,11 +17,11 @@
 
   ;Name and file
   Name "${APP_DESCRIPTION}"
-  OutFile "build/FRCTools-win.exe"
+  OutFile "build/MetricFRCTools-win.exe"
   Unicode True
 
   ;Default installation folder
-  InstallDir "$APPDATA\Autodesk\Autodesk Fusion 360\API\AddIns\FRCTools"
+  InstallDir "$APPDATA\Autodesk\Autodesk Fusion 360\API\AddIns\MetricFRCTools"
   
   ;Get installation folder from registry if available
   InstallDirRegKey HKCU "Software\${APP_REG_ID}" ""

@@ -4,7 +4,7 @@
 	"id":	"a1163e58-d70b-4233-8e48-c0ce0a6e703a",
 	"author":	"Team4698",
 	"description":	{
-		"":	"Useful tools for FRC design. \nhttps://github.com/4698RaiderRobotics/FRCTools/"
+		"":	"A version of FRCTools for those who dont use freedom units Original by #4695. \nhttps://github.com/endert1099/MetricFRCTools"
 	},
 	"version":	"1.0.5-alpha",
 	"runOnStartup":	true,
