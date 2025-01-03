@@ -33,26 +33,24 @@ class HoleConfig(typing.NamedTuple) :
 
 holeConfigs: list[HoleConfig] = [
     HoleConfig(0, 0, 0.196, 'No Holes'),
-    HoleConfig(4, 0.5, 0.196, 'All 4 Sides 1/2" Spacing (WCP)'),
-    HoleConfig(4, 1, 0.196, 'All 4 Sides 1" Spacing (VEX)'),     # Only for 1x1 tubing...
-    HoleConfig(2, 0.5, 0.196, '2 Sides 1/2" Spacing (WCP)'),
-    HoleConfig(2, 1, 0.196, '2 Sides 1" Spacing (VEX)'),
+    HoleConfig(2, 16, 5.1, "2 sides 16mm spacing 5.1mm diameter"),
+    HoleConfig(4, 16, 5.1, "4 sides 16mm spacing 5.1mm diameter"),
+    HoleConfig(2, 16, 4.0, "2 sides 16mm spacing 4mm diameter"),
+    HoleConfig(4, 16, 4.0, "4 sides 16mm spacing 4mm diameter")
 ]
 
 holeCfgDefault = 0      #   No Holes
 
 wallThicknesses = ( 
-    (0.050, '0.050"'),
-    (0.0625, '1/16"'),
-    (0.09375, '3/32"'),
-    (0.1, '0.100"'),
-    (0.125, '1/8"'),
+    (1.5, "1.5mm"),
+    (3.0, "3.0mm"),
+    (5.0, "5.0mm")
 )
-wallThicknessesDefault = wallThicknesses.index( (0.125, '1/8"') )
+wallThicknessesDefault = wallThicknesses.index( (3.0, "3.0mm") )
 
 class TubifyParams :
     solid: adsk.fusion.BRepBody = None
-    wall_thickness: float = 0.125
+    wall_thickness: float = 3.0
     config: HoleConfig = None
     end_offset: float = 0.0
     showPartialHoles: bool = True
@@ -171,7 +169,7 @@ def command_execute(args: adsk.core.CommandEventArgs):
 
     wThickIdx = wallThickness.selectedItem.index
     holeSidesIdx = holeSides.selectedItem.index
-    endOffsetIn = endOffset.value / 2.54
+    endOffsetIn = endOffset.value / 25.4
 
     ui.progressBar.show( 'Tubifying ... %v of %m', 0, solidSelection.selectionCount - 1 )
     try :
@@ -201,7 +199,7 @@ def tubifySolid( tubifyInfo: TubifyParams ) :
         longLength = orientedBB.width
     if orientedBB.length > longLength:
         longLength = orientedBB.length
-    longLength /= 2.54 # convert to inches
+    longLength /= 25.4 # convert to inches
 
     # Find end faces with the smallest area
     endArea = 999999
@@ -261,7 +259,7 @@ def tubifySolid( tubifyInfo: TubifyParams ) :
 
     # Shell out the tube 
     shells = workingComp.features.shellFeatures
-    shellThickness = adsk.core.ValueInput.createByReal( tubifyInfo.wall_thickness * 2.54 )
+    shellThickness = adsk.core.ValueInput.createByReal( tubifyInfo.wall_thickness / 10)
     shellSolidInput = shells.createInput( endFaces )
     shellSolidInput.insideThickness = shellThickness
     shells.add( shellSolidInput )
@@ -366,8 +364,8 @@ def createHoleProfiles(
         longEdge = sketchEdges.item(1)
         shortEdge = sketchEdges.item(0)
 
-    lengthIn = longEdge.length / 2.54
-    widthIn = shortEdge.length / 2.54
+    lengthIn = longEdge.length / 25.4
+    widthIn = shortEdge.length / 25.4
         
     leUnitVec = futil.sketchLineUnitVec( longEdge )
     seUnitVec = futil.sketchLineUnitVec( shortEdge )
@@ -413,7 +411,7 @@ def createHoleProfiles(
     # futil.log( f'hs={tubifyInfo.config.hole_spacing} off={tubifyInfo.end_offset}, dia={tubifyInfo.config.hole_diameter}')
     # futil.log( f'LengthOffset={LengthOffsetIn}')
     # Create the corner hole to use as the rectangular pattern
-    holeDiameter = tubifyInfo.config.hole_diameter * 2.54
+    holeDiameter = tubifyInfo.config.hole_diameter / 10
     if LengthOffsetIn > 0 :
         diag = leUnitVec.copy()
         diag.add( seUnitVec )
@@ -434,12 +432,12 @@ def createHoleProfiles(
     textPoint = cornerPoint.geometry
     widthDim = sketch.sketchDimensions.addOffsetDimension( 
         longEdge, cornerHole.centerSketchPoint, textPoint )
-    widthDim.value = 0.5 * 2.54
+    widthDim.value = 0.5 / 10
 
     # horizDim = sketch.sketchDimensions.addDistanceDimension( 
     #     cornerHole.centerSketchPoint, cornerPoint, 
     #     adsk.fusion.DimensionOrientations.HorizontalDimensionOrientation, textPoint )
-    # horizDim.value = 0.5 * 2.54
+    # horizDim.value = 0.5 / 10
 
 
     # Either create the length direction dimension of make the center
