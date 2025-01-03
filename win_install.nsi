@@ -62,8 +62,8 @@ Section "Add in" SecAddIn
 
   SetOutPath "$INSTDIR"
   
-  File FRCTools.py
-  File FRCTools.Manifest
+  File MetricFRCTools.py
+  File MetricFRCTools.Manifest
   File config.py
   File /r /x __pycache__ /x *.pyc commands
   File /r /x __pycache__ /x *.pyc lib
